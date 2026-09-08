@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "autocad": {
+      "type": "http",
+      "url": "http://127.0.0.1:7130/mcp"
+    }
+  }
+}

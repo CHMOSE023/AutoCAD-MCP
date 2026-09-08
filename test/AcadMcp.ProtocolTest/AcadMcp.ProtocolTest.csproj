@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <RootNamespace>AcadMcp</RootNamespace>
+    <AssemblyName>AcadMcp.ProtocolTest</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+
+  <!-- 链接（不是项目引用）MCP 协议层源码，绕开 AutoCAD 依赖，脱离 AutoCAD 验证传输/协议是否符合 MCP 规范。 -->
+  <ItemGroup>
+    <Compile Include="..\..\src\AcadMcp.Plugin\Mcp\JsonRpc.cs" Link="Mcp\JsonRpc.cs" />
+    <Compile Include="..\..\src\AcadMcp.Plugin\Mcp\Tool.cs" Link="Mcp\Tool.cs" />
+    <Compile Include="..\..\src\AcadMcp.Plugin\Mcp\ToolResult.cs" Link="Mcp\ToolResult.cs" />
+    <Compile Include="..\..\src\AcadMcp.Plugin\Mcp\Log.cs" Link="Mcp\Log.cs" />
+    <Compile Include="..\..\src\AcadMcp.Plugin\Mcp\Safety.cs" Link="Mcp\Safety.cs" />
+    <Compile Include="..\..\src\AcadMcp.Plugin\Mcp\Args.cs" Link="Mcp\Args.cs" />
+    <Compile Include="..\..\src\AcadMcp.Plugin\Mcp\Schema.cs" Link="Mcp\Schema.cs" />
+    <Compile Include="..\..\src\AcadMcp.Plugin\Mcp\McpDispatcher.cs" Link="Mcp\McpDispatcher.cs" />
+    <Compile Include="..\..\src\AcadMcp.Plugin\Mcp\HttpServer.cs" Link="Mcp\HttpServer.cs" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/AcadMcp.Plugin/AcadMcp.Plugin.csproj" />
+  </Folder>
+  <Folder Name="/test/">
+    <Project Path="test/AcadMcp.ProtocolTest/AcadMcp.ProtocolTest.csproj" />
+  </Folder>
+</Solution>
