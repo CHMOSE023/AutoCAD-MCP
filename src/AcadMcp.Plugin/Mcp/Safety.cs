@@ -16,6 +16,10 @@ namespace AcadMcp.Mcp
         {
             "get_status", "list_layers", "query_entities", "capture_view", "get_entity",
             "list_blocks", "get_log", "select", "measure_distance", "measure_area",
+            // P3：查询类。plot_pdf 只产出 PDF 文件、不改图形，activate_document 只切换目标，都按只读放行
+            "get_sysvars", "get_units", "convert_length",
+            "list_layouts", "list_viewports", "list_plot_devices", "list_xrefs", "list_documents",
+            "plot_pdf", "activate_document",
         };
 
         public static bool IsWrite(string tool) => !ReadOnlyTools.Contains(tool);
@@ -68,32 +72,36 @@ namespace AcadMcp.Mcp
             Log.Info("safety", "已清除 HTTP token");
         }
 
-        // ---- 会话前备份 ----
-        private static bool _backedUp;
-        public static bool SessionBackedUp => _backedUp;
+        // ---- 会话前备份（按文档，多文档下每张图各备份一次）----
+        private static readonly HashSet<string> BackedUp = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        public static bool SessionBackedUp => BackedUp.Count > 0;
+        public static string DescribeBackups() =>
+            BackedUp.Count == 0 ? "（无）" : string.Join(" / ", BackedUp.Select(Path.GetFileName));
 
         /// <summary>由插件注入：返回当前 dwg 的磁盘路径（内部自行处理主线程编组）。</summary>
         public static Func<string?>? DocPathProvider;
 
         public static void ResetSession()
         {
-            _backedUp = false;
+            BackedUp.Clear();
             Marks.Clear();
             _markSeq = 0;
         }
 
-        /// <summary>首个写操作前调用：把 dwg 磁盘上"最后保存"的版本复制一份。幂等。</summary>
+        /// <summary>
+        /// 对当前活动文档的首个写操作前调用：把 dwg 磁盘上"最后保存"的版本复制一份。
+        /// 每个文档只备份一次；切换到另一张图后，那张图的首个写操作会再备份一次。
+        /// </summary>
         public static void EnsureSessionBackupIfNeeded()
         {
-            if (_backedUp) return;
-            _backedUp = true;
-
             string? docPath;
             try { docPath = DocPathProvider?.Invoke(); }
             catch { return; }
 
             if (string.IsNullOrEmpty(docPath) || !Path.IsPathRooted(docPath) || !File.Exists(docPath))
-                return;
+                return;   // 未存盘的新图没有可备份的磁盘版本
+
+            if (!BackedUp.Add(docPath!)) return;
 
             var bak = docPath + $".mcpbak-{DateTime.Now:yyyyMMdd-HHmmss}.dwg";
             try

@@ -45,7 +45,7 @@ Claude Code ──HTTP (type:http, /mcp)──▶ AcadMcp.Plugin.dll  (NETLOAD �
 | **危险操作显式授权** | 🔸 `eval_lisp` 默认关、`run_command`/`eval_lisp` 标 DANGER、全量日志、只读模式（P2.5）；逐次弹窗审批留 P4 |
 | **视觉闭环** | 🔸 有 `capture_view`（模型按需调），未强制"每步回图"（P4 Agent 层的纪律） |
 | **一切写操作可回滚** | 🔸 全局 `undo` + `mark`/`rollback` 命名标记 + 首个写操作前自动备份（P2.5）；每步自动打标留 P4 |
-| **单实例串行、会话隔离** | 🔸 写操作在主线程串行；多文档 / 多实例隔离留 P3 |
+| **单实例串行、会话隔离** | 🔸 写操作在主线程串行；多文档靠显式 `activate_document` 切目标（P3）；多 AutoCAD 实例仍未隔离 |
 
 ---
 
@@ -376,8 +376,8 @@ sequenceDiagram
 |---|---|
 | 破坏性操作风险 | ✅ P2.5：只读模式 + 会话前备份 + `mark`/`rollback` + token；逐次审批留 P4 |
 | HTTP 端口无鉴权 | ✅ P2.5：`MCPTOKEN` / `ACADMCP_TOKEN` |
-| 单位 / 坐标系混乱 | P3：工具层单位换算、UCS 支持 |
-| 并发写冲突（用户手动操作 + Claude 同时改） | 写操作串行化已有；多会话需多实例 + session→document 绑定（P3） |
+| 单位 / 坐标系混乱 | 🔸 P3：`get_units`/`set_units`/`convert_length` + `get_sysvars`；UCS 支持仍未做 |
+| 并发写冲突（用户手动操作 + Claude 同时改） | 写操作串行化已有；P3 给出显式活动文档切换，多会话仍需多实例 + session→document 绑定（未做） |
 | 模型盲画坐标 / 比例错位 | 靠 `capture_view` 自检 + 分步；彻底解决要 P4（规范上下文、强制看图纪律） |
 
 ---
@@ -419,7 +419,7 @@ D:\AutoCADMCP\
 | MCP 协议 | **手写** JSON-RPC over Streamable HTTP（`HttpListener`） | `ModelContextProtocol` SDK 不支持 .NET Framework |
 | JSON | `Newtonsoft.Json` 13（自带，唯一运行时依赖） | 单文件、AutoCAD 里零冲突 |
 | LISP 桥 | `acedEvaluateLisp`（accore.dll，同步）+ `SendStringToExecute` 命令队列 | `(command)` 需文档上下文，见附录 C |
-| 截图 | `PrintWindow(PW_RENDERFULLCONTENT)` 抓主窗口 | 对遮挡稳健；P3 可换离屏渲染 |
+| 截图 | `PrintWindow(PW_RENDERFULLCONTENT)` 抓窗口，可只抓绘图区子窗口 | 对遮挡稳健；离屏渲染（GraphicsSystem）仍未做 |
 | 日志 | 滚动文件 `%LOCALAPPDATA%\AcadMcp\logs\` | 无外部依赖 |
 
 远期（P4）选型：Agent 编排用 Claude Agent SDK（TS/Py）；RAG 用 pgvector/Qdrant；
@@ -437,7 +437,7 @@ D:\AutoCADMCP\
 | **P1.6** | ✅ 完成 | `eval_lisp`（`acedEvaluateLisp` 同步执行 AutoLISP，默认关，`MCPLISP` 开） |
 | **P2** | ✅ 完成 | +25 个工具：绘制补全、修改（mirror/explode/break/join 原生；trim/extend/fillet/chamfer 命令队列）、6 种标注、hatch、select（选择集）、measure、define_block；错误带 hint |
 | **P2.5** | ✅ 完成 | 安全网（`Mcp/Safety.cs`）：只读模式（`MCPREADONLY`）、会话前自动备份（首个写操作前）、`mark`+`rollback` 命名 undo 标记、HTTP token 鉴权（`MCPTOKEN` / `ACADMCP_TOKEN`）、`erase_entity` >30 需 force。**共 53 个工具**。无交互式审批 UI（那是 P4 的事） |
-| **P3** | 待定 | 布局 / 图纸空间 / 视口、`plot_pdf` / 打印、外部参照 xref、单位换算、多文档隔离；再往后：表格、字段、动态块编辑、3D |
+| **P3** | ✅ 完成 | +24 个工具：布局 / 图纸空间 / 视口（`Layouts.cs`）、`plot_pdf` + 页面设置（`Plot.cs`，PlotEngine）、外部参照（`Xrefs.cs`）、多文档（`Docs.cs`，显式切活动文档）、系统变量与单位换算（`Sysvars.cs` / `Units.cs`）、截图可只取绘图区并报告 DPI。**共 77 个工具**。`plot_pdf` 只支持 area=layout/extents —— window/display/limits 在 2014 的 PlotEngine 上出白纸，已禁用并在报错里指向「布局+视口」这条正规做法。未做：UCS、表格、字段、动态块编辑、3D、离屏渲染 |
 | **P4** | 可选 | 编排：**首选**给消费方配 `.claude/` 模板（CLAUDE.md 制图纪律 + skills 做 SOP + permissions 门禁）+ 一个 `mcp:standards` 规范/图块检索 MCP。**独立编排层**（Claude Agent SDK）只在面向非 Claude 客户端 / 产品化 / 无人值守 / 硬性审计时才做。见第六章 |
 
 阶段间的实现取舍详见「附录 C」。
@@ -478,10 +478,10 @@ D:\AutoCADMCP\
 | 协议实现 | `ModelContextProtocol` SDK | **手写** JSON-RPC（SDK 不支持 .NET Framework） |
 | JSON | System.Text.Json | **Newtonsoft.Json 13**（自带、零冲突） |
 | 目标框架 | net8.0 | **net48 / x64**（AutoCAD CLR 决定） |
-| 单位换算 / 坐标系 | MCP Server 层做 | **不做**（坐标即图形单位）→ P3 |
-| 会话 → 文档映射 | 有 | 只对接当前活动文档 → P3 |
+| 单位换算 / 坐标系 | MCP Server 层做 | 坐标仍是裸图形单位；P3 补了 `convert_length` / `get_units`，UCS 未做 |
+| 会话 → 文档映射 | 有 | P3：显式 `activate_document` 切换活动文档；一个端口一个 AutoCAD 实例 |
 | UndoMark / 备份 / 审批 | 有 | 🔸 P2.5：`mark`/`rollback` + 会话前自动备份 + 只读模式 + token；无逐次审批 UI（→ P4） |
-| `capture_view` | 离屏渲染绘图区 | `PrintWindow` 抓主窗口（含工具栏） |
+| `capture_view` | 离屏渲染绘图区 | `PrintWindow` 抓窗口；`region:"drawing"` 可只抓绘图区子窗口 |
 | Agent 编排层 | 设想为核心 | **无也不需要** —— Claude Code 就是编排层；P4 首选是配 `.claude/` + `mcp:standards`，非独立系统 |
 
 ### 已实现阶段
@@ -508,6 +508,9 @@ D:\AutoCADMCP\
   注意不能用命令队列的 `(load 临时.lsp)` 包装 —— 那个和 UNDO 的组处理冲突会挂）、HTTP token 鉴权
   （`MCPTOKEN` / `ACADMCP_TOKEN` → `Authorization: Bearer`）、`erase_entity` >30 需 `force`。共 **53 个工具**。
 
-后续：**P3** 布局 / 图纸空间 / 视口 / plot_pdf / 打印 / xref / 单位换算 / 多文档隔离；
-**P4** 编排 —— 首选给消费方配 `.claude/` 模板 + 一个 `mcp:standards` 规范检索 MCP；
+- **P3**：布局 / 图纸空间 / 视口（`Layouts.cs`）、打印到 PDF（`Plot.cs`，PlotEngine + `DWG To PDF.pc3`，
+  打印期间临时 `BACKGROUNDPLOT=0`）、外部参照（`Xrefs.cs`）、多文档（`Docs.cs`，所有工具作用于活动文档，
+  切换是显式的）、系统变量与单位（`Sysvars.cs` / `Units.cs`）、截图可只取绘图区。共 **77 个工具**。
+
+后续：**P4** 编排 —— 首选给消费方配 `.claude/` 模板 + 一个 `mcp:standards` 规范检索 MCP；
 独立编排层（Claude Agent SDK）仅在面向非 Claude 客户端 / 产品化 / 无人值守 / 硬性审计时才做（见第六章）。

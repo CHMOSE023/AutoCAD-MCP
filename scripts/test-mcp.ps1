@@ -3,8 +3,16 @@
 # Usage:  powershell -File scripts\test-mcp.ps1  [-Endpoint http://127.0.0.1:7130/mcp]
 
 param(
-    [string]$Endpoint = "http://127.0.0.1:7130/mcp"
+    [string]$Endpoint = "http://127.0.0.1:7130/mcp",
+    [string]$OutDir = "D:\AutoCADMCP_DWG"
 )
+
+# Artifacts go to <OutDir>\Capture (png), <OutDir>\PFD (pdf), <OutDir> (dwg).
+$CaptureDir = Join-Path $OutDir "Capture"
+$PdfDir     = Join-Path $OutDir "PFD"
+foreach ($d in @($OutDir, $CaptureDir, $PdfDir)) {
+    if (-not (Test-Path $d)) { New-Item -ItemType Directory -Path $d | Out-Null }
+}
 
 $ErrorActionPreference = "Stop"
 $script:id = 0
@@ -77,7 +85,7 @@ $cap = Invoke-Mcp -Method "tools/call" -Params @{ name = "capture_view"; argumen
 $img = $cap.result.content | Where-Object { $_.type -eq "image" }
 if ($img) {
     $bytes = [Convert]::FromBase64String($img.data)
-    $out = Join-Path $PSScriptRoot "capture.png"
+    $out = Join-Path $CaptureDir "capture.png"
     [IO.File]::WriteAllBytes($out, $bytes)
     Write-Host ("  ok  capture_view       -> {0} bytes ({1}) saved to {2}" -f $bytes.Length, $img.mimeType, $out)
 }
@@ -86,7 +94,7 @@ else {
 }
 
 Write-Host "`n== P1: save_as =="
-$tmp = Join-Path $env:TEMP ("mcp-test-{0}.dwg" -f (Get-Date -Format "HHmmss"))
+$tmp = Join-Path $OutDir ("mcp-test-{0}.dwg" -f (Get-Date -Format "HHmmss"))
 Call-Tool "save_as" @{ path = $tmp } | Out-Null
 
 Write-Host "`n== eval_lisp =="
@@ -148,7 +156,7 @@ Call-Tool "zoom_extents" | Out-Null
 $cap2 = Invoke-Mcp -Method "tools/call" -Params @{ name = "capture_view"; arguments = @{ maxWidth = 1400 } }
 $img2 = $cap2.result.content | Where-Object { $_.type -eq "image" }
 if ($img2) {
-    [IO.File]::WriteAllBytes((Join-Path $PSScriptRoot "capture-p2.png"), [Convert]::FromBase64String($img2.data))
+    [IO.File]::WriteAllBytes((Join-Path $CaptureDir "capture-p2.png"), [Convert]::FromBase64String($img2.data))
     Write-Host "  capture-p2.png written."
 }
 
@@ -160,11 +168,88 @@ Call-Tool "draw_circle" @{ cx = 21000; cy = 0; r = 500 } | Out-Null
 Call-Tool "draw_circle" @{ cx = 22000; cy = 0; r = 500 } | Out-Null
 $c1 = ((Call-Tool "query_entities" @{ type = "Circle" }) | ConvertFrom-Json).matched
 Call-Tool "rollback" | Out-Null
-Start-Sleep -Seconds 2
-$c2 = ((Call-Tool "query_entities" @{ type = "Circle" }) | ConvertFrom-Json).matched
+# rollback goes through the AutoCAD command queue, which only runs when AutoCAD pumps messages.
+# A fixed sleep is not enough when AutoCAD sits in the background - poll instead.
+$c2 = $c1
+foreach ($i in 1..15) {
+    Start-Sleep -Seconds 1
+    $c2 = ((Call-Tool "query_entities" @{ type = "Circle" }) | ConvertFrom-Json).matched
+    if ($c2 -eq $c0) { break }
+}
+Write-Host ("  (rollback settled after {0}s)" -f $i)
 Write-Host "  circles: start=$c0  after +3=$c1  after rollback=$c2  (expect c2 == c0)"
 
 Write-Host "`n== P2.5: get_status (readOnly / authRequired / sessionBackedUp / marks) =="
 Call-Tool "get_status" | Out-Null
 
-Write-Host "`nDone. In AutoCAD check P0/P1/P2 output. capture.png / capture-p2.png / $tmp on disk."
+Write-Host "`n== P3: sysvars / units =="
+Call-Tool "get_sysvars" | Out-Null
+Call-Tool "get_sysvars" @{ names = @("LTSCALE", "OSMODE", "NOSUCHVAR") } | Out-Null   # expect NOSUCHVAR in errors
+Call-Tool "set_sysvar"  @{ name = "LTSCALE"; value = 1 } | Out-Null
+Call-Tool "get_units"   | Out-Null
+Call-Tool "convert_length" @{ value = 1000; from = "mm"; to = "m" } | Out-Null        # expect 1 m
+Call-Tool "set_units"   @{ insunits = "mm"; luprec = 2 } | Out-Null
+
+Write-Host "`n== P3: layouts / viewports =="
+Call-Tool "list_layouts" | Out-Null
+Call-Tool "create_layout" @{ name = "MCP-P3"; paperSize = "A3"; landscape = $true; setCurrent = $true } | Out-Null
+$vpText = Call-Tool "add_viewport" @{ layout = "MCP-P3"; centerX = 210; centerY = 148; width = 380; height = 250; scale = 100; viewCenterX = 2500; viewCenterY = 1500 }
+$vpH = ""
+if ($vpText -match "handle=([0-9A-Fa-f]+)") { $vpH = $matches[1] }
+Call-Tool "list_viewports" @{ layout = "MCP-P3" } | Out-Null
+if ($vpH) { Call-Tool "set_viewport" @{ handle = $vpH; scale = 200; locked = $true } | Out-Null }
+Call-Tool "list_layouts" @{ includeViewports = $true } | Out-Null
+
+Write-Host "`n== P3: plot to PDF =="
+Call-Tool "list_plot_devices" | Out-Null
+$pdf = Join-Path $PdfDir ("mcp-plot-{0}.pdf" -f (Get-Date -Format "HHmmss"))
+Call-Tool "plot_pdf" @{ layout = "MCP-P3"; output = $pdf; paperSize = "A3"; landscape = $true } | Out-Null
+if (Test-Path $pdf) {
+    Write-Host ("  ok  plot_pdf file     -> {0} ({1} KB)" -f $pdf, [math]::Round((Get-Item $pdf).Length / 1KB, 1))
+}
+else {
+    Write-Host "  ERR plot_pdf file     -> not found: $pdf"
+}
+
+Write-Host "`n== P3: xrefs =="
+Call-Tool "list_xrefs" | Out-Null
+if (Test-Path $tmp) {
+    # reuse the save_as copy from the P1 section as an xref source
+    Call-Tool "attach_xref"  @{ path = $tmp; x = 30000; y = 0; scale = 1 } | Out-Null
+    Call-Tool "list_xrefs"   | Out-Null
+    Call-Tool "manage_xrefs" @{ op = "reload" } | Out-Null
+    Call-Tool "manage_xrefs" @{ op = "detach" } | Out-Null
+}
+else {
+    Write-Host "  skip xref tests - $tmp missing"
+}
+
+Write-Host "`n== P3: documents =="
+$before = ((Call-Tool "list_documents") | ConvertFrom-Json).count
+Call-Tool "new_document" | Out-Null
+$after = ((Call-Tool "list_documents") | ConvertFrom-Json).count
+Write-Host "  documents: before=$before after_new=$after"
+if ($after -gt $before) {
+    Call-Tool "close_document" @{ save = $false; force = $true } | Out-Null
+    Call-Tool "activate_document" @{ index = 0 } | Out-Null
+    $final = ((Call-Tool "list_documents") | ConvertFrom-Json).count
+    Write-Host "  documents after close: $final (expect $before)"
+}
+
+Write-Host "`n== P3: capture drawing area =="
+$cap3 = Invoke-Mcp -Method "tools/call" -Params @{ name = "capture_view"; arguments = @{ maxWidth = 1200; region = "drawing"; zoomExtents = $true } }
+$img3 = $cap3.result.content | Where-Object { $_.type -eq "image" }
+if ($img3) {
+    [IO.File]::WriteAllBytes((Join-Path $CaptureDir "capture-p3.png"), [Convert]::FromBase64String($img3.data))
+    Write-Host ("  ok  capture drawing   -> {0}" -f ($cap3.result.content | Where-Object { $_.type -eq "text" }).text)
+}
+else {
+    Write-Host "  ERR capture_view      -> no image in response"
+}
+
+Write-Host "`n== P3: cleanup =="
+Call-Tool "set_layout"    @{ name = "Model" }   | Out-Null
+Call-Tool "delete_layout" @{ name = "MCP-P3" }  | Out-Null
+Call-Tool "get_status"    | Out-Null
+
+Write-Host "`nDone. In AutoCAD check P0/P1/P2/P3 output. capture.png / capture-p2.png / capture-p3.png / $tmp / $pdf on disk."

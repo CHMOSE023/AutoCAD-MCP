@@ -64,6 +64,19 @@ namespace AcadMcp.Mcp
             ["description"] = desc,
         };
 
+        /// <summary>定长数字数组属性 schema（如 [x1,y1,x2,y2]）。</summary>
+        public static JObject NumArray(string desc, int len) => new JObject
+        {
+            ["type"] = "array",
+            ["items"] = new JObject { ["type"] = "number" },
+            ["minItems"] = len,
+            ["maxItems"] = len,
+            ["description"] = desc,
+        };
+
+        /// <summary>任意类型的属性 schema（值类型由目标决定，如系统变量）。</summary>
+        public static JObject Any(string desc) => new JObject { ["description"] = desc };
+
         /// <summary>数字二元组数组 schema（点列表 [[x,y],...]）。</summary>
         public static JObject PointArray(string desc) => new JObject
         {

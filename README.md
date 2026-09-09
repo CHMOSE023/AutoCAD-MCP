@@ -1,6 +1,6 @@
 # AutoCAD MCP 插件
 
-让 **Claude Code**（或任何 MCP 客户端）通过 MCP 协议操作 AutoCAD。**53 个工具**，AutoCAD 2014 实测通过。
+让 **Claude Code**（或任何 MCP 客户端）通过 MCP 协议操作 AutoCAD。**77 个工具**，AutoCAD 2014 实测通过（P3 部分待端到端复测）。
 
 一个 .NET AutoCAD 插件（NETLOAD 进 AutoCAD），插件内嵌一个 HTTP 服务，按 **MCP
 Streamable HTTP** 规范对外暴露工具。Claude Code 以 `type: http` 直连
@@ -9,7 +9,7 @@ Streamable HTTP** 规范对外暴露工具。Claude Code 以 `type: http` 直连
 ```
 Claude Code ──HTTP /mcp──▶ AcadMcp.Plugin.dll (NETLOAD 进 AutoCAD)
                              ├─ HttpListener 127.0.0.1:7130 + 手写 MCP JSON-RPC
-                             ├─ 53 个工具
+                             ├─ 77 个工具
                              ├─ 主线程调度 (Application.Idle 队列)
                              ├─ 命令队列桥 (SendStringToExecute + 结果文件轮询)
                              ├─ 安全网（只读模式 / 备份 / mark-rollback / token）
@@ -114,7 +114,7 @@ claude mcp add --transport http autocad http://127.0.0.1:7130/mcp
 
 ---
 
-## 4. 工具清单（53 个）
+## 4. 工具清单（77 个）
 
 **P0 · 基础绘图闭环**
 
@@ -167,6 +167,37 @@ claude mcp add --transport http autocad http://127.0.0.1:7130/mcp
 | `measure_distance` / `measure_area` | 测量 | 两点距离 / 闭合实体面积周长 |
 | `define_block` | 图块 | 用一组实体定义新图块（可原位替换为块引用） |
 
+**P3 · 布局出图 / 单位 / 外部参照 / 多文档**
+
+| 工具 | 类别 | 说明 |
+|---|---|---|
+| `get_sysvars` / `set_sysvar` | 只读 / 设置 | 读写任意系统变量（GETVAR / SETVAR）；不传 names 时给一份常用变量快照 |
+| `get_units` / `set_units` | 只读 / 设置 | INSUNITS（1 图形单位代表的现实长度）、长度 / 角度格式与精度 |
+| `convert_length` | 只读 | 单位换算（mm / cm / m / km / in / ft / yd / mi）；`from` 省略时用图形 INSUNITS |
+| `list_layouts` / `set_layout` | 布局 | 列出布局（设备 / 纸张 / 方向 / 视口数）、切换当前布局（`Model` 回模型空间） |
+| `create_layout` / `delete_layout` | 布局 | 新建布局（可同时定设备 / 纸张 / 方向）、删除布局 |
+| `list_viewports` / `add_viewport` / `set_viewport` | 视口 | 浮动视口的增删改：图纸位置尺寸（毫米）、比例（`scale=100` 即 1:100）、对准的模型点、开关与锁定 |
+| `list_plot_devices` | 只读 | 可用打印设备 + 某设备支持的纸张名与打印样式表 |
+| `set_page_setup` | 打印 | 把设备 / 纸张 / 方向固化进布局的页面设置 |
+| `plot_pdf` | 打印 | 打印到 PDF（`DWG To PDF.pc3`）。范围 `layout`（图纸，默认）/ `extents`（图形范围）；`scale` 省略＝布满图纸；可单色 |
+| `list_xrefs` | 只读 | 外部参照：路径、附着方式、解析状态、插入 handle |
+| `attach_xref` | 参照 | 附着 / 覆盖一个 DWG 并插入模型空间 |
+| `manage_xrefs` | 参照 | `reload` 重载 / `unload` 卸载 / `detach` 拆离（names 省略＝全部） |
+| `bind_xref` | 参照 | 绑定为本地图块（脱离源文件） |
+| `list_documents` / `activate_document` | 多文档 | 列出打开的图形、切换活动文档 |
+| `open_document` / `new_document` / `close_document` | 多文档 | 打开 / 按样板新建 / 关闭（丢弃修改需 `force=true`） |
+
+**多文档模型**：所有工具都作用于**当前活动文档**。同时开多张图时，先 `activate_document` 切过去
+再操作 —— 隔离靠"显式切换 + 每次调用都记日志"，而不是并发多目标。
+每张图的**首个写操作**前各自触发一次自动备份。
+
+**布局出图的典型流程**：`create_layout`（A3 横向）→ `add_viewport`（图纸毫米定位 + `scale`
+定比例 + `viewCenterX/Y` 对准模型区域）→ `set_viewport locked:true` 锁死 → `plot_pdf`。
+
+**只出图形的局部**：别指望按矩形裁剪（`area=window` 在 AutoCAD 2014 上打不出内容，见「已知限制」），
+就走上面这条布局 + 视口的路 —— `viewCenterX/Y` 对准要出的位置、`scale` 定比例、`width/height` 定视口大小。
+这本来就是 AutoCAD 里控制出图范围的正规做法。
+
 **P2.5 · 安全网**
 
 | 工具 | 类别 | 说明 |
@@ -180,7 +211,7 @@ claude mcp add --transport http autocad http://127.0.0.1:7130/mcp
 - **HTTP token 鉴权**：`MCPTOKEN` 生成 token（或设环境变量 `ACADMCP_TOKEN`），之后所有请求
   必须带 `Authorization: Bearer <token>`；`claude mcp add ... --header "Authorization: Bearer <token>"`
 - **批量删除保护**：`erase_entity` 一次删 >30 个需 `force=true`
-- `get_status` 返回 `readOnly` / `authRequired` / `sessionBackedUp` / `marks`
+- `get_status` 返回 `readOnly` / `authRequired` / `backups`（已备份的图形）/ `marks` / `layout` / `openDocuments`
 
 修改类工具（`move` `copy` `rotate` `scale` `mirror` `explode` `erase_entity` `hatch`）都支持
 `useSelection: true` —— 用 `select` 的结果代替显式 handle。
@@ -189,13 +220,15 @@ claude mcp add --transport http autocad http://127.0.0.1:7130/mcp
 轮询结果文件），因为这些交互命令需要文档上下文；比其它工具慢几百毫秒。不受 `eval_lisp` 开关影响。
 `break_entity` / `join` 是 .NET 原生。
 
-坐标与尺寸单位＝当前图形单位（不做单位换算）。写操作立即修改图纸。
-`capture_view` 用 `PrintWindow` 抓主窗口（含菜单栏），P2 可换成仅绘图区的离屏渲染。
+坐标与尺寸单位＝当前图形单位；要按现实尺寸下料先用 `convert_length` 换算，`get_units` 看当前 INSUNITS。
+写操作立即修改图纸。
+`capture_view` 用 `PrintWindow` 抓窗口，`region:"drawing"` 只截绘图区（去掉功能区 / 命令行，更省 token），
+`zoomExtents:true` 可在截图前先缩放到图形范围；返回文本里带实际像素与窗口 DPI。
 
 ### `eval_lisp` —— 任意代码执行，默认关闭
 
 `eval_lisp` 让模型直接写并执行 AutoLISP（能读返回值、`(defun ...)` 定义函数后复用、`vlax-*`
-操作对象），把工具集从固定 26 个变成可自扩展。但 AutoLISP 能删文件 / 起进程 / 调 COM，
+操作对象），把工具集从固定的那些变成可自扩展。但 AutoLISP 能删文件 / 起进程 / 调 COM，
 等于**在你机器上任意代码执行**，风险高于 `run_command`。
 
 - 默认**不可用**，调用会返回"未启用"提示
@@ -237,7 +270,7 @@ dotnet run --project test/AcadMcp.ProtocolTest -c Release
 
 用假工具验证内嵌 HTTP + MCP JSON-RPC 传输符合 MCP Streamable HTTP 规范
 （initialize / tools.list / tools.call / 图片块 / 错误码 + hint / UTF-8 / Origin 校验 / 协议版本头 / 日志）。
-应输出 `34 passed, 0 failed`。
+应输出 `37 passed, 0 failed`。
 
 ### 6.2 连着 AutoCAD 的端到端测试
 
@@ -247,21 +280,41 @@ NETLOAD 插件后，另开一个终端：
 pwsh scripts/test-mcp.ps1
 ```
 
-依次调用 `initialize → tools/list → get_status → create_layer → draw_line →
-query_entities → zoom_extents → erase_entity`，并在 AutoCAD 中肉眼确认图元出现 / 消失。
+脚本按阶段跑一遍：P0 绘制 / 查询 / 删除 → P1 截图 + `save_as` → `eval_lisp`（若已开）→
+P2 绘制补全 / 修改 / 标注 / 填充 / 选择集 / 测量 → P2.5 `mark`+`rollback` →
+**P3** 系统变量与单位 → 布局 + 视口 → `plot_pdf` → 外部参照 附着/重载/拆离 →
+多文档 新建/关闭 → 只截绘图区的截图 → 清理（删掉测试布局）。
+
+产物：`scripts/capture.png`、`capture-p2.png`、`capture-p3.png`，`%TEMP%` 下的测试 dwg 与 pdf。
+在 AutoCAD 中肉眼确认图元出现 / 消失、布局与视口正确。
+
+> 脚本必须保持**纯 ASCII**：Windows PowerShell 5.1 按系统 ANSI 读 .ps1，中文会让它解析崩溃。
 
 ---
 
 ## 已知限制
 
-- 只对接**当前活动文档**；多文档 / 多 AutoCAD 实例未隔离（P3）
+- 一次只对接**当前活动文档**（`activate_document` 显式切换）；多 AutoCAD 实例仍未隔离（一个端口一个实例）
 - 只读模式 / 会话前备份 / `mark`+`rollback` / token 鉴权已有（P2.5），但**没有交互式审批 UI**——
   危险操作靠"默认关 + 命令开关 + 日志"，不是逐次弹窗确认
-- `run_command` / `save` / `undo` 及 trim/fillet 等走 AutoCAD 命令队列，是**异步 / 有延迟**的
-- `capture_view` 抓整个主窗口（含工具栏）；被完全遮挡时个别显卡驱动可能截到黑图
+- `run_command` / `save` / `undo` / `rollback` 及 trim/fillet 等走 AutoCAD 命令队列，是**异步**的：
+  命令只在 AutoCAD 处理消息时才执行，**窗口在后台且无人操作时可能拖几秒甚至更久**
+  （现象：鼠标移到 AutoCAD 上，积压的命令立刻开始跑）。要确认结果就轮询 `query_entities` / `get_status`，
+  别用固定 sleep
+- `capture_view` 默认抓整个主窗口，`region:"drawing"` 只抓绘图区；被完全遮挡时个别显卡驱动可能截到黑图。
+  截图分辨率受 AutoCAD 自身 DPI 感知能力限制（老版本在高 DPI 屏上由系统拉伸位图，返回文本会提示）
 - `Application.Idle` 在 AutoCAD 有模态对话框或长时间无响应时不触发，工具会在 30s 后超时
 - `insert_block` 只能插入**当前图形中已定义**的图块，不从外部 dwg 导入
-- 无单位换算：坐标 / 尺寸都是裸图形单位（P3）
+- 坐标 / 尺寸参数始终是裸图形单位；`convert_length` 只做数值换算，不会替你改坐标
+- `plot_pdf` 依赖 `DWG To PDF.pc3` 设备；打印期间会临时把 `BACKGROUNDPLOT` 置 0（结束后恢复）
+- **`plot_pdf` 只支持 `area=layout` / `extents`**。`window` / `display` / `limits` 在 AutoCAD 2014 的
+  PlotEngine 上会正确排版却不渲染图形（出白纸），已实测排除多种写法（调换窗口与范围类型的设置顺序、
+  图纸单位提前、`MatchEnabled`→`MatchDisabled`、改走 `Display`+临时视图、改走 `Limits`、
+  把设置写进布局而非 `OverrideSettings`），因此直接禁用并在错误信息里给出替代方案。
+  AutoCAD 自带 PLOT 对话框用同一套设置预览是正确的，所以这是引擎限制而非参数问题。
+  另：`display` 的打印区域按当前视口宽高比算（绘图区被命令行挤扁时只剩 285x89mm），本来也不可靠
+- 首次 `plot_pdf` 要等打印引擎冷启动（实测 15~90 秒），之后每次约 0.2 秒
+- `add_viewport` 创建视口时会先切到目标布局（视口的"打开"状态只在其所属布局为当前布局时可靠生效）
 
 后续路线见 [ARCHITECTURE.md](ARCHITECTURE.md) 第十二节 / 附录 C。
 
@@ -279,7 +332,8 @@ D:\AutoCADMCP\
 ├─ src/AcadMcp.Plugin/             插件（net48, x64）
 │  ├─ PluginEntry.cs               入口 + 命令 MCPSTART/MCPSTOP/MCPSTATUS
 │  ├─ Mcp/                         HTTP + JSON-RPC + 工具注册 + 日志 + 安全网（Safety.cs）
-│  ├─ Acad/                        AutoCAD 操作（绘制/修改/编辑/标注/填充/测量/查询/图层/图块/截图/视图/LISP）
-│  └─ Tools/ToolCatalog.cs         53 个工具的定义
+│  ├─ Acad/                        AutoCAD 操作：绘制/修改/编辑/标注/填充/测量/查询/图层/图块/截图/视图/LISP
+│  │                               P3：Layouts / Plot / Xrefs / Docs / Sysvars / Units
+│  └─ Tools/ToolCatalog.cs         77 个工具的定义
 └─ test/AcadMcp.ProtocolTest/      协议一致性测试（链接 Mcp/*.cs，不依赖 AutoCAD）
 ```

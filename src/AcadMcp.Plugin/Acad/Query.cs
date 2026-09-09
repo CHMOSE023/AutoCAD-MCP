@@ -47,6 +47,8 @@ namespace AcadMcp.Acad
                 ["saved"] = System.IO.Path.IsPathRooted(doc.Name),
                 ["units"] = db.Insunits.ToString(),
                 ["space"] = db.TileMode ? "model" : "paper",
+                ["layout"] = LayoutManager.Current.CurrentLayout,
+                ["openDocuments"] = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.Count,
             };
 
             // Application.Idle 运行在应用上下文，UpdateExt 会写 sysvar，必须锁文档
@@ -73,7 +75,7 @@ namespace AcadMcp.Acad
             o["evalLisp"] = Lisp.Enabled;
             o["readOnly"] = Mcp.Safety.ReadOnly;
             o["authRequired"] = Mcp.Safety.AuthRequired;
-            o["sessionBackedUp"] = Mcp.Safety.SessionBackedUp;
+            o["backups"] = Mcp.Safety.DescribeBackups();
             o["marks"] = Mcp.Safety.DescribeMarks();
             o["logFile"] = Mcp.Log.CurrentFile;
             o["logWrites"] = Mcp.Log.WriteCount;

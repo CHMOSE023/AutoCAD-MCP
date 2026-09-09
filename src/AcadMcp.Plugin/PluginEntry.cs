@@ -99,6 +99,17 @@ namespace AcadMcp
             }
         }
 
+        /// <summary>
+        /// 内部命令：执行 plot_pdf 排队的打印任务。**不要手工调用** —— 它只在有待处理请求时做事。
+        /// 存在的理由：PlotEngine 必须跑在文档上下文，而工具调用来自 HTTP 线程 / Application.Idle。
+        /// 不加 CommandFlags.Session：那会让命令在应用上下文执行，正是要避开的东西。
+        /// </summary>
+        [CommandMethod("MCPPLOT")]
+        public void McpPlot()
+        {
+            Acad.Plot.RunPending();
+        }
+
         [CommandMethod("MCPREADONLY")]
         public void McpReadOnly()
         {

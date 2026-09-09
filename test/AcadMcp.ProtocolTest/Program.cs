@@ -30,6 +30,13 @@ var tools = new List<Tool>
         (Func<JObject, string>)(_ => throw new Exception("kaboom"))),
     new Tool("gone", "抛 handle 未找到", Schema.Object(),
         (Func<JObject, string>)(_ => throw new Exception("未找到 handle 2A3"))),
+    // P3 的 schema 助手：定长数字数组（plot_pdf 的 window）+ 任意类型值（set_sysvar 的 value）
+    new Tool("plotish", "定长数字数组 + 任意类型参数",
+        Schema.With(
+            Schema.With(Schema.Object(Schema.P("layout", "string", "布局名")),
+                "window", Schema.NumArray("[x1,y1,x2,y2]", 4)),
+            "value", Schema.Any("任意类型的值")),
+        a => $"win={(a["window"] as JArray)?.Count},val={a["value"]?.Type}"),
 };
 
 var dispatcher = new McpDispatcher(tools);
@@ -76,9 +83,28 @@ try
     // 4. tools/list
     var (_, body4, _) = await Post("""{"jsonrpc":"2.0","id":3,"method":"tools/list"}""");
     var list = JObject.Parse(body4)["result"]?["tools"] as JArray;
-    Check("tools/list count", list?.Count == 5, "count=" + (list?.Count));
+    Check("tools/list count", list?.Count == 6, "count=" + (list?.Count));
     Check("tools/list has inputSchema", list?[0]?["inputSchema"]?["type"]?.ToString() == "object");
     Check("tools/list name+description", (string?)list?[0]?["name"] == "echo" && list?[0]?["description"] != null);
+
+    // 4b. P3 schema 助手：NumArray 带 minItems/maxItems，Any 不限制类型
+    JToken? plotish = null;
+    if (list != null)
+        foreach (var t in list)
+            if ((string?)t["name"] == "plotish") plotish = t;
+    var props = plotish?["inputSchema"]?["properties"];
+    Check("NumArray schema 定长约束",
+        (int?)props?["window"]?["minItems"] == 4 && (int?)props?["window"]?["maxItems"] == 4
+        && (string?)props?["window"]?["items"]?["type"] == "number", props?.ToString());
+    Check("Any schema 不限制类型",
+        props?["value"] != null && props?["value"]?["type"] == null && props?["value"]?["description"] != null,
+        props?["value"]?.ToString());
+
+    // 4c. 数组 / 任意类型参数能原样送达处理函数
+    var (_, bodyArr, _) = await Post(
+        """{"jsonrpc":"2.0","id":31,"method":"tools/call","params":{"name":"plotish","arguments":{"window":[0,0,100,50],"value":42}}}""");
+    Check("数组与任意类型参数送达",
+        (string?)JObject.Parse(bodyArr)["result"]?["content"]?[0]?["text"] == "win=4,val=Integer", bodyArr);
 
     // 5. tools/call 正常
     var (st5, body5, _) = await Post(

@@ -179,13 +179,22 @@ namespace AcadMcp.Tools
 
             tools.Add(new Tool(
                 "capture_view",
-                "截取 AutoCAD 主窗口为 PNG 图片返回（用于查看当前绘图效果、自检）。可传 maxWidth 限制宽度。",
-                Object(P("maxWidth", "integer", "输出图片最大宽度像素，默认按窗口原始尺寸；建议 1200 左右")),
+                "截取 AutoCAD 为 PNG 图片返回（查看当前绘图效果、自检）。region=drawing 只截绘图区（更干净、更省 token）；" +
+                "zoomExtents=true 会先缩放到图形范围再截。",
+                Object(P("maxWidth", "integer", "输出图片最大宽度像素，默认按窗口原始尺寸；建议 1200 左右"),
+                    P("region", "string", "window（整窗，默认）或 drawing（只要绘图区）"),
+                    P("zoomExtents", "boolean", "截图前先缩放到图形范围，默认 false")),
                 a =>
                 {
                     int? mw = Args.IntOrNull(a, "maxWidth");
-                    var png = MainThread.Invoke(() => Capture.MainWindowPng(mw));
-                    return ToolResult.TextAndImage("AutoCAD 当前视图：", png, "image/png");
+                    string? region = Args.StrOrNull(a, "region");
+                    bool zoom = Args.BoolOr(a, "zoomExtents", false);
+                    var shot = MainThread.Invoke(() =>
+                    {
+                        if (zoom) ViewDoc.ZoomExtents();
+                        return Capture.Take(mw, region);
+                    });
+                    return ToolResult.TextAndImage(shot.Info, shot.Png, "image/png");
                 }));
 
             tools.Add(new Tool(
@@ -546,7 +555,9 @@ namespace AcadMcp.Tools
                     {
                         ViewDoc.RunCommand("_.UNDO _Back");
                         var label = Mcp.Safety.PopMark();
-                        return $"已回滚到标记 {label}。剩余标记：{Mcp.Safety.DescribeMarks()}";
+                        // UNDO 走命令队列，是异步的：AutoCAD 在后台没有消息可处理时会拖上几秒才执行
+                        return $"已发送回滚到标记 {label} 的命令（异步执行，通常 1 秒内完成；" +
+                               $"AutoCAD 在后台时可能更久）。用 query_entities 确认结果。剩余标记：{Mcp.Safety.DescribeMarks()}";
                     });
                 }));
 
@@ -559,7 +570,229 @@ namespace AcadMcp.Tools
                 a => MainThread.Invoke(() => Blocks.Define(Args.Str(a, "name"), StrList(a, "entityHandles"),
                     Args.Num(a, "baseX"), Args.Num(a, "baseY"), Args.BoolOr(a, "keepSource", true)))));
 
+            // ================= P3：系统变量与单位 =================
+
+            tools.Add(new Tool("get_sysvars",
+                "读系统变量（GETVAR）。不传 names 时返回一份常用变量快照（图层/单位/标注/捕捉/显示等）。",
+                With(Object(), "names", StrArray("要读的变量名数组，如 [\"DIMTXT\",\"OSMODE\"]；省略则读常用清单")),
+                a => MainThread.Invoke(() => Sysvars.Get(StrList(a, "names")))));
+
+            tools.Add(new Tool("set_sysvar",
+                "设一个系统变量（SETVAR）。值的类型按变量当前类型自动转换；只读变量会报错。",
+                With(Object(P("name", "string", "变量名，如 OSMODE / DIMTXT / LTSCALE", true)),
+                    "value", Any("新值：整数 / 实数 / 字符串 / 点 [x,y]，按变量类型给")),
+                a =>
+                {
+                    var v = a["value"] ?? throw new McpParamException("缺少必填参数：value");
+                    return MainThread.Invoke(() => Sysvars.Set(Args.Str(a, "name"), v));
+                }));
+
+            tools.Add(new Tool("get_units",
+                "查看图形单位设置：INSUNITS（1 图形单位代表的现实长度）、长度/角度显示格式与精度、LTSCALE、DIMSCALE。",
+                Object(),
+                _ => MainThread.Invoke(() => Units.Get())));
+
+            tools.Add(new Tool("set_units",
+                "改图形单位设置。只影响插入缩放与数值显示格式，不会缩放已有几何。",
+                Object(P("insunits", "string", "插入单位：mm / cm / m / km / in / ft / yd / mi 或 INSUNITS 数值 0-24"),
+                    P("lunits", "integer", "长度格式 1=科学 2=小数 3=工程 4=建筑 5=分数"),
+                    P("luprec", "integer", "长度精度（小数位）0-8"),
+                    P("aunits", "integer", "角度格式 0=十进制度 1=度分秒 2=百分度 3=弧度 4=勘测"),
+                    P("auprec", "integer", "角度精度 0-8")),
+                a => MainThread.Invoke(() => Units.Set(Args.StrOrNull(a, "insunits"),
+                    Args.IntOrNull(a, "lunits"), Args.IntOrNull(a, "luprec"),
+                    Args.IntOrNull(a, "aunits"), Args.IntOrNull(a, "auprec")))));
+
+            tools.Add(new Tool("convert_length",
+                "长度单位换算（纯计算）。from 省略时用图形当前 INSUNITS。用于把现实尺寸换算成图形单位再画图。",
+                Object(P("value", "number", "数值", true),
+                    P("to", "string", "目标单位：mm / cm / m / km / in / ft / yd / mi", true),
+                    P("from", "string", "源单位，省略则用图形 INSUNITS")),
+                a => Units.Convert(Args.Num(a, "value"), Args.StrOrNull(a, "from"), Args.Str(a, "to"))));
+
+            // ================= P3：布局 / 图纸空间 / 视口 =================
+
+            tools.Add(new Tool("list_layouts",
+                "列出所有布局（图纸）及其打印设备、纸张、方向、浮动视口数，并标出当前布局。",
+                Object(P("includeViewports", "boolean", "同时列出每个布局的视口明细，默认 false")),
+                a => MainThread.Invoke(() => Layouts.List(Args.BoolOr(a, "includeViewports", false)))));
+
+            tools.Add(new Tool("set_layout",
+                "切换当前布局。传 Model 回到模型空间（TILEMODE=1），传布局名进入图纸空间。",
+                Object(P("name", "string", "布局名，或 Model 表示模型空间", true)),
+                a => MainThread.Invoke(() => Layouts.SetCurrent(Args.Str(a, "name")))));
+
+            tools.Add(new Tool("create_layout",
+                "新建布局（图纸）。可同时指定打印设备、纸张（A4/A3 或完整纸张名）与方向。",
+                Object(P("name", "string", "布局名", true),
+                    P("plotDevice", "string", "打印设备，默认沿用；出 PDF 用 DWG To PDF.pc3"),
+                    P("paperSize", "string", "纸张，如 A3 / A4 或完整 canonical 名"),
+                    P("landscape", "boolean", "横向，默认 false（纵向）"),
+                    P("setCurrent", "boolean", "创建后切为当前布局，默认 true")),
+                a => MainThread.Invoke(() => Layouts.Create(Args.Str(a, "name"),
+                    Args.StrOrNull(a, "plotDevice"), Args.StrOrNull(a, "paperSize"),
+                    Args.BoolOr(a, "landscape", false), Args.BoolOr(a, "setCurrent", true)))));
+
+            tools.Add(new Tool("delete_layout",
+                "删除一个布局（连同其上的视口与图纸空间实体）。不能删模型空间，也不会删到最后一个布局。",
+                Object(P("name", "string", "布局名", true)),
+                a => MainThread.Invoke(() => Layouts.Delete(Args.Str(a, "name")))));
+
+            tools.Add(new Tool("list_viewports",
+                "列出某个布局上的浮动视口：handle、图纸位置尺寸、对准的模型点、比例、开关与锁定状态。",
+                Object(P("layout", "string", "布局名，省略则用当前布局")),
+                a => MainThread.Invoke(() => Layouts.ListViewports(Args.StrOrNull(a, "layout")))));
+
+            tools.Add(new Tool("add_viewport",
+                "在布局上开一个浮动视口。centerX/centerY/width/height 是图纸坐标（毫米）；" +
+                "scale=100 表示 1:100；viewCenterX/Y 指定视口对准的模型空间点。",
+                Object(P("centerX", "number", "视口中心 X（图纸毫米）", true),
+                    P("centerY", "number", "视口中心 Y（图纸毫米）", true),
+                    P("width", "number", "视口宽（图纸毫米）", true),
+                    P("height", "number", "视口高（图纸毫米）", true),
+                    P("layout", "string", "布局名，省略则用当前布局"),
+                    P("scale", "number", "出图比例分母：100 表示 1:100"),
+                    P("viewCenterX", "number", "对准的模型空间点 X"),
+                    P("viewCenterY", "number", "对准的模型空间点 Y"),
+                    P("locked", "boolean", "创建后锁定视口（防止误缩放），默认 false")),
+                a => MainThread.Invoke(() => Layouts.AddViewport(Args.StrOrNull(a, "layout"),
+                    Args.Num(a, "centerX"), Args.Num(a, "centerY"),
+                    Args.Num(a, "width"), Args.Num(a, "height"),
+                    Args.NumOrNull(a, "scale"), Args.NumOrNull(a, "viewCenterX"), Args.NumOrNull(a, "viewCenterY"),
+                    Args.BoolOr(a, "locked", false)), 60000)));
+
+            tools.Add(new Tool("set_viewport",
+                "改浮动视口：比例、对准的模型点、图纸位置与尺寸、开关、锁定。锁定的视口会自动临时解锁再改。",
+                Object(P("handle", "string", "视口 handle（list_viewports 获取）", true),
+                    P("scale", "number", "出图比例分母：100 表示 1:100"),
+                    P("viewCenterX", "number", "对准的模型空间点 X"),
+                    P("viewCenterY", "number", "对准的模型空间点 Y"),
+                    P("centerX", "number", "视口中心 X（图纸毫米）"),
+                    P("centerY", "number", "视口中心 Y（图纸毫米）"),
+                    P("width", "number", "视口宽（图纸毫米）"),
+                    P("height", "number", "视口高（图纸毫米）"),
+                    P("on", "boolean", "打开/关闭视口显示"),
+                    P("locked", "boolean", "锁定/解锁")),
+                a => MainThread.Invoke(() => Layouts.SetViewport(Args.Str(a, "handle"),
+                    Args.NumOrNull(a, "scale"), Args.NumOrNull(a, "viewCenterX"), Args.NumOrNull(a, "viewCenterY"),
+                    Args.NumOrNull(a, "centerX"), Args.NumOrNull(a, "centerY"),
+                    Args.NumOrNull(a, "width"), Args.NumOrNull(a, "height"),
+                    BoolOrNull(a, "on"), BoolOrNull(a, "locked")))));
+
+            // ================= P3：打印 =================
+
+            tools.Add(new Tool("list_plot_devices",
+                "列出可用打印设备；并给出某个设备（默认 DWG To PDF.pc3）支持的纸张名与打印样式表，供 plot_pdf 选参数。",
+                Object(P("device", "string", "要查纸张的设备名，默认 DWG To PDF.pc3")),
+                a => MainThread.Invoke(() => Plot.ListDevices(Args.StrOrNull(a, "device")))));
+
+            tools.Add(new Tool("set_page_setup",
+                "把打印设备 / 纸张 / 方向写进布局的页面设置（存进 DWG，之后打印默认就用它）。",
+                Object(P("layout", "string", "布局名", true),
+                    P("device", "string", "打印设备，默认 DWG To PDF.pc3"),
+                    P("paperSize", "string", "纸张，如 A3 / A4 或完整 canonical 名"),
+                    P("landscape", "boolean", "横向，默认 false")),
+                a => MainThread.Invoke(() => Plot.ApplyPageSetup(Args.Str(a, "layout"),
+                    Args.StrOrNull(a, "device"), Args.StrOrNull(a, "paperSize"),
+                    Args.BoolOr(a, "landscape", false)), 60000)));
+
+            tools.Add(new Tool("plot_pdf",
+                "打印到 PDF（DWG To PDF.pc3）。默认打当前布局的图纸范围；打模型空间时默认按图形范围。" +
+                "scale 省略=布满图纸，scale=100 表示 1:100。output 省略则输出到 dwg 同目录并加时间戳。" +
+                "只出图形的**局部**：不要指望按矩形裁剪（AutoCAD 2014 的打印引擎打不出内容），" +
+                "改用 create_layout + add_viewport（viewCenterX/Y 对准位置、scale 定比例、width/height 定视口大小）再打这个布局。",
+                Object(P("layout", "string", "布局名或 Model，省略则用当前布局"),
+                    P("output", "string", "输出 PDF 绝对路径，如 D:\\\\work\\\\plan.pdf"),
+                    P("paperSize", "string", "纸张，如 A3 / A4，省略则用布局页面设置"),
+                    P("landscape", "boolean", "横向；省略则沿用布局设置"),
+                    P("area", "string", "打印范围：layout（图纸，默认）或 extents（图形范围）。window / display / limits 在 AutoCAD 2014 上出不来内容，已禁用"),
+                    P("scale", "number", "比例分母：100 表示 1:100；省略=布满图纸"),
+                    P("monochrome", "boolean", "用 monochrome.ctb 单色打印，默认 false")),
+                a =>
+                    // 不包 MainThread.Invoke：内部走命令队列（PlotEngine 需要文档上下文）
+                    Plot.ToPdf(
+                        Args.StrOrNull(a, "layout"), Args.StrOrNull(a, "output"), Args.StrOrNull(a, "paperSize"),
+                        BoolOrNull(a, "landscape"), Args.StrOrNull(a, "area") ?? "layout", null,
+                        Args.NumOrNull(a, "scale"), Args.BoolOr(a, "monochrome", false))));
+
+            // ================= P3：外部参照 =================
+
+            tools.Add(new Tool("list_xrefs",
+                "列出图形里的外部参照：名称、路径、附着方式、解析状态、插入次数与块引用 handle。",
+                Object(),
+                _ => MainThread.Invoke(() => Xrefs.List())));
+
+            tools.Add(new Tool("attach_xref",
+                "把一个 DWG 附着为外部参照并在模型空间插入。overlay=true 用覆盖方式（不随宿主再被参照时嵌套）。",
+                Object(P("path", "string", "DWG 路径（绝对路径，或相对当前图形目录）", true),
+                    P("x", "number", "插入点 X，默认 0"),
+                    P("y", "number", "插入点 Y，默认 0"),
+                    P("scale", "number", "缩放，默认 1"),
+                    P("rotation", "number", "旋转角度（度），默认 0"),
+                    P("overlay", "boolean", "覆盖方式，默认 false=附着"),
+                    P("name", "string", "参照名，默认取文件名")),
+                a => MainThread.Invoke(() => Xrefs.Attach(Args.Str(a, "path"),
+                    Args.NumOr(a, "x", 0), Args.NumOr(a, "y", 0), Args.NumOr(a, "scale", 1),
+                    Args.NumOr(a, "rotation", 0), Args.BoolOr(a, "overlay", false),
+                    Args.StrOrNull(a, "name")), 120000)));
+
+            tools.Add(new Tool("manage_xrefs",
+                "对外部参照执行 reload（重载，取源文件最新内容）/ unload（卸载，保留定义不显示）/ detach（拆离，彻底移除）。names 省略=全部。",
+                With(Object(P("op", "string", "reload / unload / detach", true)),
+                    "names", StrArray("要操作的参照名数组，省略则全部")),
+                a => MainThread.Invoke(() => Xrefs.Operate(Args.Str(a, "op"), StrList(a, "names")), 120000)));
+
+            tools.Add(new Tool("bind_xref",
+                "把外部参照绑定成宿主图自己的图块（脱离源文件）。insertBind=true 时符号名不加 $0$ 前缀。",
+                With(Object(P("insertBind", "boolean", "Insert 方式绑定（不加前缀），默认 false")),
+                    "names", StrArray("要绑定的参照名数组，省略则全部")),
+                a => MainThread.Invoke(() => Xrefs.Bind(StrList(a, "names"),
+                    Args.BoolOr(a, "insertBind", false)), 120000)));
+
+            // ================= P3：多文档 =================
+
+            tools.Add(new Tool("list_documents",
+                "列出 AutoCAD 中打开的所有图形及其索引、路径、只读状态，并标出当前活动文档（所有工具都作用于它）。",
+                Object(),
+                _ => MainThread.Invoke(() => Docs.List())));
+
+            tools.Add(new Tool("activate_document",
+                "切换活动文档。之后所有工具都作用于新的活动文档。传 index 或文件名片段。",
+                Object(P("name", "string", "文件名片段（大小写不敏感）"),
+                    P("index", "integer", "list_documents 里的 index")),
+                a => MainThread.Invoke(() => Docs.Activate(Args.StrOrNull(a, "name"), Args.IntOrNull(a, "index")), 60000)));
+
+            tools.Add(new Tool("open_document",
+                "打开一个 DWG 并切为活动文档。已打开的直接激活。",
+                Object(P("path", "string", "DWG 绝对路径", true),
+                    P("readOnly", "boolean", "以只读方式打开，默认 false")),
+                a => MainThread.Invoke(() => Docs.Open(Args.Str(a, "path"), Args.BoolOr(a, "readOnly", false)), 180000)));
+
+            tools.Add(new Tool("new_document",
+                "按样板新建一个图形并切为活动文档（默认 acadiso.dwt 公制样板）。新图尚未保存，用 save_as 存盘。",
+                Object(P("template", "string", "样板文件名或绝对路径，默认 acadiso.dwt")),
+                a => MainThread.Invoke(() => Docs.New(Args.StrOrNull(a, "template")), 120000)));
+
+            tools.Add(new Tool("close_document",
+                "关闭一个图形。save=true 存盘后关；save=false 丢弃未保存修改（需同时 force=true）。不会关掉最后一个图形。",
+                Object(P("name", "string", "文件名片段，省略则关当前活动文档"),
+                    P("index", "integer", "list_documents 里的 index"),
+                    P("save", "boolean", "关闭前保存，默认 true"),
+                    P("force", "boolean", "save=false 时必须显式传 true 才丢弃修改")),
+                a => MainThread.Invoke(() => Docs.Close(Args.StrOrNull(a, "name"), Args.IntOrNull(a, "index"),
+                    Args.BoolOr(a, "save", true), Args.BoolOr(a, "force", false)), 120000),
+                dangerous: true));
+
             return tools;
+        }
+
+        /// <summary>可选布尔参数：缺失返回 null（用于"不传就不改"的语义）。</summary>
+        private static bool? BoolOrNull(JObject a, string key)
+        {
+            var t = a[key];
+            if (t == null || t.Type == JTokenType.Null) return null;
+            try { return t.Value<bool>(); }
+            catch { throw new McpParamException($"参数 {key} 必须是布尔值"); }
         }
 
         /// <summary>从参数里取 handle（单个）、handles（数组）或 useSelection（当前选择集）。</summary>
