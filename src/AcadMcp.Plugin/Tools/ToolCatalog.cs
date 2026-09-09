@@ -22,7 +22,7 @@ namespace AcadMcp.Tools
 
             tools.Add(new Tool(
                 "list_layers",
-                "列出当前图形所有图层及其颜色索引、开/关、锁定、冻结状态，并标出当前图层。",
+                "列出当前图形所有图层：颜色索引、线宽、线型、开/关、锁定、冻结，并标出当前图层。",
                 Object(),
                 _ => MainThread.Invoke(() => Layers.List())));
 
@@ -41,13 +41,26 @@ namespace AcadMcp.Tools
             // ---------- 图层 ----------
             tools.Add(new Tool(
                 "create_layer",
-                "创建图层；若已存在则仅按需更新颜色。colorIndex 为 AutoCAD 颜色索引 1-255。",
+                "创建图层；若已存在则仅按需更新颜色 / 线型。colorIndex 为 AutoCAD 颜色索引 1-255。" +
+                "linetype 可传 CENTER（中心线）/ DASHED（虚线）/ HIDDEN / PHANTOM 等，图形里没有会自动从线型库加载。",
                 Object(
                     P("name", "string", "图层名", required: true),
-                    P("colorIndex", "integer", "颜色索引 1-255，可选")),
+                    P("colorIndex", "integer", "颜色索引 1-255，可选"),
+                    P("linetype", "string", "线型名，可选；轴线 / 道路中心线用 CENTER"),
+                    P("lineWeight", "number",
+                        "线宽（毫米），可选。单线表达的建筑图靠它分层次：承重墙柱 0.7 / 隔墙 0.35 / 家具填充 0.18 / 轴线标注 0.13。" +
+                        "会就近取 AutoCAD 的标准档；屏幕上要看见需 set_sysvar LWDISPLAY=1，打印始终生效")),
                 a => MainThread.Invoke(() => Layers.Create(
                     Args.Str(a, "name"),
-                    Args.IntOrNull(a, "colorIndex")))));
+                    Args.IntOrNull(a, "colorIndex"),
+                    Args.StrOrNull(a, "linetype"),
+                    Args.NumOrNull(a, "lineWeight")))));
+
+            tools.Add(new Tool(
+                "list_linetypes",
+                "列出图形中已加载的线型。未列出的名字也可直接用，会自动从 acadiso.lin / acad.lin 加载。",
+                Object(),
+                _ => MainThread.Invoke(() => Layers.ListLinetypes())));
 
             tools.Add(new Tool(
                 "set_current_layer",
@@ -222,6 +235,48 @@ namespace AcadMcp.Tools
                 a => MainThread.Invoke(() => Modify.Copy(
                     Args.Str(a, "handle"), Args.Num(a, "dx"), Args.Num(a, "dy"), Args.IntOr(a, "count", 1)))));
 
+            tools.Add(new Tool("set_entity_layer",
+                "把已有实体改到指定图层（图层不存在会自动创建），可选同时改颜色 / 线宽。" +
+                "批量插块后忘了指定图层、或事后要重新分层时用它 —— 图层是按图层配线宽和跑 check_* 校验的前提。" +
+                "传 handle / handles / useSelection。",
+                Selectable(Object(
+                    P("layer", "string", "目标图层名", true),
+                    P("colorIndex", "integer", "实体颜色索引 1-255，可选（一般不用，让它跟图层走）"),
+                    P("lineWeight", "number", "实体线宽（毫米），可选（一般不用，让它跟图层走）"),
+                    P("byLayerColor", "boolean", "把颜色重置为 ByLayer，默认 false"))),
+                a => MainThread.Invoke(() => Modify.SetLayer(Handles(a),
+                    Args.Str(a, "layer"), Args.IntOrNull(a, "colorIndex"),
+                    Args.NumOrNull(a, "lineWeight"), Args.BoolOr(a, "byLayerColor", false)), 60000)));
+
+            tools.Add(new Tool("array_rect",
+                "矩形阵列：把实体按行列复制（柱网、车位、座椅）。rows×cols 含原件本身，" +
+                "行距 rowSpacing 沿 Y、列距 colSpacing 沿 X，可为负；angleDeg 让整个阵列倾斜（斜列式车位）。" +
+                "源实体保留。比 copy 强的地方是两个方向同时铺。",
+                Selectable(Object(
+                    P("rows", "integer", "行数（含原件），沿 Y", true),
+                    P("cols", "integer", "列数（含原件），沿 X", true),
+                    P("rowSpacing", "number", "行距，可为负（向下铺）"),
+                    P("colSpacing", "number", "列距，可为负（向左铺）"),
+                    P("angleDeg", "number", "整个阵列的倾斜角，默认 0"))),
+                a => MainThread.Invoke(() => Arrange.Rectangular(Handles(a),
+                    Args.IntOr(a, "rows", 1), Args.IntOr(a, "cols", 1),
+                    Args.NumOr(a, "rowSpacing", 0), Args.NumOr(a, "colSpacing", 0),
+                    Args.NumOr(a, "angleDeg", 0)), 60000)));
+
+            tools.Add(new Tool("array_polar",
+                "环形阵列：绕 (centerX, centerY) 均布 count 份（含原件）。fillAngleDeg 默认 360 整圈。" +
+                "rotateItems=true 每份跟着转（辐条、螺栓），false 保持原朝向（树、路灯、家具）。源实体保留。",
+                Selectable(Object(
+                    P("centerX", "number", "阵列中心 X", true),
+                    P("centerY", "number", "阵列中心 Y", true),
+                    P("count", "integer", "总份数（含原件），>=2", true),
+                    P("fillAngleDeg", "number", "张角，默认 360（整圈均布）"),
+                    P("rotateItems", "boolean", "每份是否跟着旋转，默认 true"))),
+                a => MainThread.Invoke(() => Arrange.Polar(Handles(a),
+                    Args.Num(a, "centerX"), Args.Num(a, "centerY"),
+                    Args.IntOr(a, "count", 2), Args.NumOr(a, "fillAngleDeg", 360),
+                    Args.BoolOr(a, "rotateItems", true)), 60000)));
+
             tools.Add(new Tool(
                 "rotate",
                 "绕基点 (baseX, baseY) 旋转实体，angleDeg 逆时针为正。传 handle / handles / useSelection。",
@@ -256,7 +311,8 @@ namespace AcadMcp.Tools
 
             tools.Add(new Tool(
                 "list_blocks",
-                "列出当前图形中已定义的图块名（供 insert_block 使用）。",
+                "列出当前图形中已定义的图块：实体数、基点、**相对基点的包围盒**（bboxFromBase）、占位尺寸、已插入次数。" +
+                "插入前先看 bboxFromBase —— 它决定块相对插入点往哪个方向长，基点在底边的块最容易插反。",
                 Object(),
                 _ => MainThread.Invoke(() => Blocks.List())));
 
@@ -269,14 +325,17 @@ namespace AcadMcp.Tools
                     P("y", "number", "插入点 Y", required: true),
                     P("xscale", "number", "X 比例，默认 1"),
                     P("yscale", "number", "Y 比例，默认 1"),
-                    P("rotation", "number", "旋转角度（度），默认 0")),
+                    P("rotation", "number", "旋转角度（度），默认 0"),
+                    P("layer", "string", "目标图层，可选（不存在会自动创建）。不传则落在当前图层 —— 批量插块时建议显式指定，否则事后按图层查越界 / 配线宽会对不上")),
                 a => MainThread.Invoke(() => Blocks.Insert(
                     Args.Str(a, "name"), Args.Num(a, "x"), Args.Num(a, "y"),
-                    Args.NumOr(a, "xscale", 1), Args.NumOr(a, "yscale", 1), Args.NumOr(a, "rotation", 0)))));
+                    Args.NumOr(a, "xscale", 1), Args.NumOr(a, "yscale", 1), Args.NumOr(a, "rotation", 0),
+                    Args.StrOrNull(a, "layer")))));
 
             tools.Add(new Tool(
                 "save_as",
-                "把当前图形另存为指定绝对路径的 .dwg（可保存未命名的新图形）。",
+                "把当前图形另存为指定绝对路径的 .dwg（可保存未命名的新图形），并把当前文档切换到该文件。" +
+                "文件是同步写出的（立即可用），文档切换走命令队列异步完成，之后 get_status 会显示新路径。",
                 Object(P("path", "string", "目标绝对路径，例如 D:\\work\\plan.dwg", required: true)),
                 a => MainThread.Invoke(() => ViewDoc.SaveAs(Args.Str(a, "path")))));
 
@@ -750,6 +809,37 @@ namespace AcadMcp.Tools
                     Args.BoolOr(a, "insertBind", false)), 120000)));
 
             // ================= P3：多文档 =================
+
+            // ================= 空间校验：把"位置对不对"也变成可自动判定的 =================
+
+            tools.Add(new Tool("check_overlap",
+                "检查一组实体两两之间有没有重叠（按包围盒判定，共边不算）。" +
+                "典型用法：房间画在同一图层，查功能分区有没有画重叠。传 layer 查整层，或用 handles 指定。",
+                With(Object(P("layer", "string", "要检查的图层名（查整层）"),
+                        P("minOverlapArea", "number", "小于该面积的重叠忽略，默认 0")),
+                    "handles", StrArray("要检查的实体 handle 数组（与 layer 二选一）")),
+                a => MainThread.Invoke(() => Check.Overlap(
+                    StrList(a, "handles"), Args.StrOrNull(a, "layer"),
+                    Args.NumOr(a, "minOverlapArea", 0)), 60000)));
+
+            tools.Add(new Tool("check_inside",
+                "检查一组实体是否都落在某个边界实体内（按包围盒判定）。" +
+                "典型用法：房间是否都在建筑轮廓内、建筑是否在用地红线内。越界的会给出各方向超出多少。",
+                With(Object(P("boundary", "string", "边界实体的 handle，如建筑轮廓 / 用地红线", true),
+                        P("layer", "string", "要检查的图层名（查整层）")),
+                    "handles", StrArray("要检查的实体 handle 数组（与 layer 二选一）")),
+                a => MainThread.Invoke(() => Check.Inside(
+                    StrList(a, "handles"), Args.StrOrNull(a, "layer"), Args.Str(a, "boundary")), 60000)));
+
+            tools.Add(new Tool("check_adjacency",
+                "检查两个实体是否相邻（包围盒搭接或间距在 gap 之内）。" +
+                "用来核任务书的**功能关系图** —— 候车大厅要挨着检票、检票要挨着发车站台，可逐条验证。" +
+                "结果分 PASS（相邻）/ FAIL（不相邻，给出实际间距）/ OVERLAP（压在一起，不是相邻）。",
+                Object(P("handleA", "string", "实体 A 的 handle", true),
+                    P("handleB", "string", "实体 B 的 handle", true),
+                    P("gap", "number", "允许的缝隙（墙厚 / 走廊宽），默认 0")),
+                a => MainThread.Invoke(() => Check.Adjacency(
+                    Args.Str(a, "handleA"), Args.Str(a, "handleB"), Args.NumOr(a, "gap", 0)), 60000)));
 
             tools.Add(new Tool("list_documents",
                 "列出 AutoCAD 中打开的所有图形及其索引、路径、只读状态，并标出当前活动文档（所有工具都作用于它）。",

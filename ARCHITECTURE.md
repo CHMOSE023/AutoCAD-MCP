@@ -437,7 +437,8 @@ D:\AutoCADMCP\
 | **P1.6** | ✅ 完成 | `eval_lisp`（`acedEvaluateLisp` 同步执行 AutoLISP，默认关，`MCPLISP` 开） |
 | **P2** | ✅ 完成 | +25 个工具：绘制补全、修改（mirror/explode/break/join 原生；trim/extend/fillet/chamfer 命令队列）、6 种标注、hatch、select（选择集）、measure、define_block；错误带 hint |
 | **P2.5** | ✅ 完成 | 安全网（`Mcp/Safety.cs`）：只读模式（`MCPREADONLY`）、会话前自动备份（首个写操作前）、`mark`+`rollback` 命名 undo 标记、HTTP token 鉴权（`MCPTOKEN` / `ACADMCP_TOKEN`）、`erase_entity` >30 需 force。**共 53 个工具**。无交互式审批 UI（那是 P4 的事） |
-| **P3** | ✅ 完成 | +24 个工具：布局 / 图纸空间 / 视口（`Layouts.cs`）、`plot_pdf` + 页面设置（`Plot.cs`，PlotEngine）、外部参照（`Xrefs.cs`）、多文档（`Docs.cs`，显式切活动文档）、系统变量与单位换算（`Sysvars.cs` / `Units.cs`）、截图可只取绘图区并报告 DPI。**共 77 个工具**。`plot_pdf` 只支持 area=layout/extents —— window/display/limits 在 2014 的 PlotEngine 上出白纸，已禁用并在报错里指向「布局+视口」这条正规做法。未做：UCS、表格、字段、动态块编辑、3D、离屏渲染 |
+| **P3** | ✅ 完成 | +24 个工具：布局 / 图纸空间 / 视口（`Layouts.cs`）、`plot_pdf` + 页面设置（`Plot.cs`，PlotEngine）、外部参照（`Xrefs.cs`）、多文档（`Docs.cs`，显式切活动文档）、系统变量与单位换算（`Sysvars.cs` / `Units.cs`）、截图可只取绘图区并报告 DPI。**共 77 个工具**（后续补充到 84，见 P3.5）。`plot_pdf` 只支持 area=layout/extents —— window/display/limits 在 2014 的 PlotEngine 上出白纸，已禁用并在报错里指向「布局+视口」这条正规做法。未做：UCS、表格、字段、动态块编辑、3D、离屏渲染 |
+| **P3.5** | ✅ 完成 | +7 个工具：`array_rect` / `array_polar`（矩形 / 环形阵列，上限 2000 实体）、`list_linetypes`、`set_entity_layer`、`check_overlap` / `check_inside` / `check_adjacency`（空间校验）。增强：`create_layer` 加线型与线宽（单线表达靠线宽分层次）、`list_layers` 列出线宽线型、`insert_block` 加图层参数、`list_blocks` 给出相对基点的包围盒、`save_as` 真正切换当前文档。**共 84 个工具**。这批全部来自用一注真题实测时卡住的地方 |
 | **P4** | 可选 | 编排：**首选**给消费方配 `.claude/` 模板（CLAUDE.md 制图纪律 + skills 做 SOP + permissions 门禁）+ 一个 `mcp:standards` 规范/图块检索 MCP。**独立编排层**（Claude Agent SDK）只在面向非 Claude 客户端 / 产品化 / 无人值守 / 硬性审计时才做。见第六章 |
 
 阶段间的实现取舍详见「附录 C」。
@@ -510,7 +511,10 @@ D:\AutoCADMCP\
 
 - **P3**：布局 / 图纸空间 / 视口（`Layouts.cs`）、打印到 PDF（`Plot.cs`，PlotEngine + `DWG To PDF.pc3`，
   打印期间临时 `BACKGROUNDPLOT=0`）、外部参照（`Xrefs.cs`）、多文档（`Docs.cs`，所有工具作用于活动文档，
-  切换是显式的）、系统变量与单位（`Sysvars.cs` / `Units.cs`）、截图可只取绘图区。共 **77 个工具**。
+  切换是显式的）、系统变量与单位（`Sysvars.cs` / `Units.cs`）、截图可只取绘图区。
+- **P3.5**：阵列（`Arrange.cs`）、线型 / 线宽、空间校验（`Check.cs`：重叠 / 越界 / 相邻）、
+  `set_entity_layer`。校验这组是为了补上「面积对但位置错」这个盲区 ——
+  和 `measure_area` 对照面积表一起，形成「面积 + 位置 + 关系」的自动校验闭环。共 **84 个工具**。
 
 后续：**P4** 编排 —— 首选给消费方配 `.claude/` 模板 + 一个 `mcp:standards` 规范检索 MCP；
 独立编排层（Claude Agent SDK）仅在面向非 Claude 客户端 / 产品化 / 无人值守 / 硬性审计时才做（见第六章）。

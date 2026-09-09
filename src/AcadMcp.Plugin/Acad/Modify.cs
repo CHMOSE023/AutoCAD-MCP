@@ -69,6 +69,59 @@ namespace AcadMcp.Acad
         public static string Move(IReadOnlyList<string> handles, double dx, double dy)
             => Transform(handles, Matrix3d.Displacement(new Vector3d(dx, dy, 0)), "移动");
 
+        /// <summary>
+        /// 把已有实体改到指定图层，可顺带覆盖颜色 / 线宽。
+        ///
+        /// 为什么需要：图层是按图层配线宽、按图层做校验的前提。批量插块时若没指定图层，
+        /// 块引用会全落在当时的当前图层上（实测有 102 个块跑到 DIM 和 0 层），
+        /// 事后既查不出越界也吃不到线宽 —— 那次只能靠 eval_lisp + entmod 绕，
+        /// 而 eval_lisp 默认是关的，不该成为常规操作的依赖。
+        /// </summary>
+        public static string SetLayer(IReadOnlyList<string> handles, string layer,
+            int? colorIndex, double? lineWeightMm, bool byLayerColor)
+        {
+            if (string.IsNullOrWhiteSpace(layer)) throw new ArgumentException("layer 不能为空。");
+            if (handles.Count == 0) throw new ArgumentException("需要至少一个实体 handle。");
+
+            var doc = AcadContext.ActiveDocument;
+            var db = doc.Database;
+            int changed = 0;
+            var notFound = new List<string>();
+
+            using (doc.LockDocument())
+            using (var tr = db.TransactionManager.StartTransaction())
+            {
+                Layers.EnsureLayer(tr, db, layer, null);
+
+                foreach (var h in handles)
+                {
+                    if (!Draw.TryGetObjectId(db, h, out var id)) { notFound.Add(h); continue; }
+                    if (!(tr.GetObject(id, OpenMode.ForWrite) is Entity ent)) { notFound.Add(h); continue; }
+
+                    ent.Layer = layer;
+
+                    if (byLayerColor)
+                        ent.ColorIndex = 256;                      // 256 = ByLayer
+                    else if (colorIndex.HasValue)
+                        ent.ColorIndex = Math.Max(0, Math.Min(256, colorIndex.Value));
+
+                    if (lineWeightMm.HasValue)
+                        ent.LineWeight = Layers.ToLineWeight(lineWeightMm.Value);
+
+                    changed++;
+                }
+                tr.Commit();
+            }
+
+            var msg = $"已把 {changed} 个实体改到图层 '{layer}'";
+            if (byLayerColor) msg += "，颜色设为 ByLayer";
+            else if (colorIndex.HasValue) msg += $"，颜色索引 {colorIndex.Value}";
+            if (lineWeightMm.HasValue) msg += $"，线宽 {lineWeightMm.Value:0.00}mm";
+            msg += "。";
+            if (notFound.Count > 0) msg += $" 未找到：{string.Join(", ", notFound)}";
+            return msg;
+        }
+
         public static string Rotate(IReadOnlyList<string> handles, double baseX, double baseY, double angleDeg)
             => Transform(handles,
                 Matrix3d.Rotation(angleDeg * Math.PI / 180.0, Vector3d.ZAxis, new Point3d(baseX, baseY, 0)),

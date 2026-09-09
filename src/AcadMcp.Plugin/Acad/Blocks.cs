@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.Geometry;
+using Newtonsoft.Json.Linq;
 
 namespace AcadMcp.Acad
 {
@@ -59,11 +60,16 @@ namespace AcadMcp.Acad
             }
         }
 
+        /// <summary>
+        /// 列出图块定义。带**相对基点的包围盒** —— 插入时才知道块往基点的哪个方向长，
+        /// 不然很容易把整排块插到该在的位置之外（基点在底边的车位块尤其容易搞反）。
+        /// </summary>
         public static string List()
         {
             var doc = AcadContext.ActiveDocument;
             var db = doc.Database;
-            var names = new List<string>();
+            var items = new List<JObject>();
+
             using (doc.LockDocument())
             using (var tr = db.TransactionManager.StartTransaction())
             {
@@ -72,17 +78,58 @@ namespace AcadMcp.Acad
                 {
                     var btr = (BlockTableRecord)tr.GetObject(id, OpenMode.ForRead);
                     if (btr.IsLayout || btr.IsAnonymous) continue;
-                    names.Add(btr.Name);
+
+                    var o = new JObject { ["name"] = btr.Name };
+
+                    int count = 0;
+                    double minX = double.MaxValue, minY = double.MaxValue;
+                    double maxX = double.MinValue, maxY = double.MinValue;
+                    foreach (ObjectId eid in btr)
+                    {
+                        if (!(tr.GetObject(eid, OpenMode.ForRead) is Entity ent)) continue;
+                        count++;
+                        try
+                        {
+                            var ext = ent.GeometricExtents;
+                            minX = Math.Min(minX, ext.MinPoint.X); minY = Math.Min(minY, ext.MinPoint.Y);
+                            maxX = Math.Max(maxX, ext.MaxPoint.X); maxY = Math.Max(maxY, ext.MaxPoint.Y);
+                        }
+                        catch { /* 个别实体没有几何范围 */ }
+                    }
+
+                    o["entities"] = count;
+                    o["origin"] = $"{btr.Origin.X:0.###},{btr.Origin.Y:0.###}";
+
+                    if (minX <= maxX)
+                    {
+                        // 换算成相对基点（Origin）的偏移，正数表示往 +X / +Y 方向长
+                        double bx = btr.Origin.X, by = btr.Origin.Y;
+                        o["bboxFromBase"] =
+                            $"{minX - bx:0.###},{minY - by:0.###} .. {maxX - bx:0.###},{maxY - by:0.###}";
+                        o["size"] = $"{maxX - minX:0.###} x {maxY - minY:0.###}";
+                    }
+
+                    o["insertCount"] = btr.GetBlockReferenceIds(true, true).Count;
+                    o["isXref"] = btr.IsFromExternalReference;
+                    items.Add(o);
                 }
                 tr.Commit();
             }
-            names.Sort(StringComparer.OrdinalIgnoreCase);
-            return names.Count == 0
-                ? "当前图形没有可用图块定义。"
-                : string.Join("\n", names);
+
+            if (items.Count == 0) return "当前图形没有可用图块定义。";
+
+            items.Sort((a, b) => string.Compare((string?)a["name"], (string?)b["name"], StringComparison.OrdinalIgnoreCase));
+            return new JObject
+            {
+                ["count"] = items.Count,
+                ["blocks"] = new JArray(items),
+                ["note"] = "bboxFromBase 是相对基点的范围：insert_block 给的 (x,y) 是基点位置，" +
+                           "块的实际占位 = 插入点 + bboxFromBase。",
+            }.ToString(Newtonsoft.Json.Formatting.Indented);
         }
 
-        public static string Insert(string name, double x, double y, double xscale, double yscale, double rotationDeg)
+        public static string Insert(string name, double x, double y, double xscale, double yscale,
+            double rotationDeg, string? layer)
         {
             var doc = AcadContext.ActiveDocument;
             var db = doc.Database;
@@ -107,6 +154,15 @@ namespace AcadMcp.Acad
                     ScaleFactors = new Scale3d(xscale, yscale, 1.0),
                     Rotation = rotationDeg * Math.PI / 180.0,
                 };
+
+                // 不指定图层的话，块引用会落在"当前图层"上 —— 批量插树 / 车位时很容易
+                // 全跑到 DIM 之类的层里，事后按图层查越界、改线宽全都对不上。
+                if (!string.IsNullOrWhiteSpace(layer))
+                {
+                    Layers.EnsureLayer(tr, db, layer!, null);
+                    br.Layer = layer!;
+                }
+
                 ms.AppendEntity(br);
                 tr.AddNewlyCreatedDBObject(br, true);
 

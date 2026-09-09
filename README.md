@@ -1,6 +1,6 @@
 # AutoCAD MCP 插件
 
-让 **Claude Code**（或任何 MCP 客户端）通过 MCP 协议操作 AutoCAD。**77 个工具**，AutoCAD 2014 实测通过（P3 部分待端到端复测）。
+让 **Claude Code**（或任何 MCP 客户端）通过 MCP 协议操作 AutoCAD。**84 个工具**，AutoCAD 2014 实测通过。
 
 一个 .NET AutoCAD 插件（NETLOAD 进 AutoCAD），插件内嵌一个 HTTP 服务，按 **MCP
 Streamable HTTP** 规范对外暴露工具。Claude Code 以 `type: http` 直连
@@ -9,7 +9,7 @@ Streamable HTTP** 规范对外暴露工具。Claude Code 以 `type: http` 直连
 ```
 Claude Code ──HTTP /mcp──▶ AcadMcp.Plugin.dll (NETLOAD 进 AutoCAD)
                              ├─ HttpListener 127.0.0.1:7130 + 手写 MCP JSON-RPC
-                             ├─ 77 个工具
+                             ├─ 84 个工具
                              ├─ 主线程调度 (Application.Idle 队列)
                              ├─ 命令队列桥 (SendStringToExecute + 结果文件轮询)
                              ├─ 安全网（只读模式 / 备份 / mark-rollback / token）
@@ -114,7 +114,7 @@ claude mcp add --transport http autocad http://127.0.0.1:7130/mcp
 
 ---
 
-## 4. 工具清单（77 个）
+## 4. 工具清单（84 个）
 
 **P0 · 基础绘图闭环**
 
@@ -144,7 +144,7 @@ claude mcp add --transport http autocad http://127.0.0.1:7130/mcp
 | `offset` | 修改 | 曲线偏移（Line / Polyline / Circle / Arc） |
 | `list_blocks` | 只读 | 列出图形中已定义的图块名 |
 | `insert_block` | 图块 | 在指定点插入已定义图块 |
-| `save_as` | 文档 | 另存为指定绝对路径 .dwg（可存未命名新图） |
+| `save_as` | 文档 | 另存为指定绝对路径 .dwg，并把当前文档切换到该文件（文件同步写出，切换走命令队列异步完成） |
 | `undo` | 修改 | 撤销最近操作（等价命令行 U），可指定步数 |
 | `get_log` | 只读 | 返回今天日志最后 N 行（自查刚才发生了什么） |
 | `eval_lisp` | 逃生舱 | 【危险 · 任意代码执行】同步执行 AutoLISP 表达式并返回其值。**默认关闭**，见下 |
@@ -197,6 +197,35 @@ claude mcp add --transport http autocad http://127.0.0.1:7130/mcp
 **只出图形的局部**：别指望按矩形裁剪（`area=window` 在 AutoCAD 2014 上打不出内容，见「已知限制」），
 就走上面这条布局 + 视口的路 —— `viewCenterX/Y` 对准要出的位置、`scale` 定比例、`width/height` 定视口大小。
 这本来就是 AutoCAD 里控制出图范围的正规做法。
+
+**P3.5 · 阵列 / 线型线宽 / 空间校验**
+
+| 工具 | 类别 | 说明 |
+|---|---|---|
+| `array_rect` | 阵列 | 矩形阵列：`rows`×`cols` 含原件，行距沿 Y、列距沿 X（可为负），`angleDeg` 让整个阵列倾斜（斜列式车位）。柱网、车位、座席全靠它 —— 91 根柱 / 400 座席都是一次调用 |
+| `array_polar` | 阵列 | 环形阵列：绕中心均布，`fillAngleDeg` 默认整圈，`rotateItems` 控制每份跟转（辐条）还是保持朝向（树、路灯） |
+| `list_linetypes` | 只读 | 列出已加载线型；未列出的名字也能直接用，会自动从 `acadiso.lin` / `acad.lin` 加载 |
+| `set_entity_layer` | 修改 | 把已有实体改到指定图层（自动建层），可选带颜色 / 线宽。批量插块后重新分层用它 |
+| `check_overlap` | 校验 | 一组实体两两查重叠（共边不算）。查功能分区有没有画重 |
+| `check_inside` | 校验 | 查实体是否都在某边界内，越界的给出各方向超出多少 |
+| `check_adjacency` | 校验 | 查两个实体是否相邻，分 PASS / FAIL / **OVERLAP**（压在一起不算相邻）。**用来核任务书的功能关系图** |
+
+**图层三件套**：`create_layer` 增加了 `linetype`（轴线用 CENTER）与 `lineWeight`（毫米，就近取 AutoCAD 标准档）。
+单线表达的建筑图靠线宽分层次：承重墙柱 0.7 / 隔墙 0.35 / 家具填充 0.18 / 轴线标注 0.13。
+线宽默认不在屏幕显示，`set_sysvar LWDISPLAY=1` 才看得见（**打印时始终生效**）。
+`list_layers` 会一并列出线宽与线型，配完能直接确认。
+
+**为什么要有 check_ 这组校验**：面积和数量对不代表画对了。实测里翻过车 —— 块插反方向撞上行道树、
+房间位置排错，而面积校核全是满分。这类错只有看图才发现，看图又没法自动化。
+这三个检查把「位置对不对」也变成可判定的，和 `measure_area` 对照面积表一起，
+形成「面积 + 位置 + 关系」的自动校验闭环。
+
+**`insert_block` 增加 `layer` 参数**：不指定的话块引用会落在**当前图层**上。
+实测有 102 个块跑到了 `DIM` 和 `0` 层 —— 后果不只是按图层查越界查不到，
+**按图层配的线宽对它们也完全失效**。批量插块务必显式指定图层。
+
+**`list_blocks` 增加 `bboxFromBase`**：块相对基点的包围盒。
+插入点给的是基点位置，块往哪个方向长得看它 —— 基点在底边的车位块最容易插反。
 
 **P2.5 · 安全网**
 
@@ -334,6 +363,6 @@ D:\AutoCADMCP\
 │  ├─ Mcp/                         HTTP + JSON-RPC + 工具注册 + 日志 + 安全网（Safety.cs）
 │  ├─ Acad/                        AutoCAD 操作：绘制/修改/编辑/标注/填充/测量/查询/图层/图块/截图/视图/LISP
 │  │                               P3：Layouts / Plot / Xrefs / Docs / Sysvars / Units
-│  └─ Tools/ToolCatalog.cs         77 个工具的定义
+│  └─ Tools/ToolCatalog.cs         84 个工具的定义
 └─ test/AcadMcp.ProtocolTest/      协议一致性测试（链接 Mcp/*.cs，不依赖 AutoCAD）
 ```

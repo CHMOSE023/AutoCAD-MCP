@@ -69,8 +69,31 @@ namespace AcadMcp.Acad
                 {
                     try
                     {
+                        // 先把文件写出去：这一步是同步的，成败立刻知道，文件内容有保障
                         doc.Database.SaveAs(path, v);
-                        return $"已保存到：{path}（格式 {v}）";
+
+                        // 但 Database.SaveAs 的语义只是"另存一份副本" —— 当前文档仍指向原来的，
+                        // 修改标记也不清，标签页上继续挂着 *。要让文档真正切过去只能走 SAVEAS 命令。
+                        // 难点是 FILEDIA=1（默认）时 SAVEAS 弹文件对话框，会把主线程冻住；
+                        // 解法是把 FILEDIA 的关与开**和 SAVEAS 一起排进命令队列**——
+                        // 队列顺序执行，恢复动作也在队列里，不依赖插件这边的时机控制。
+                        string esc = path.Replace("\\", "/");
+                        string switchNote;
+                        try
+                        {
+                            doc.SendStringToExecute(
+                                "_.FILEDIA 0\n_.SAVEAS\n\n" + esc + "\nY\n_.FILEDIA 1\n",
+                                false, false, false);
+                            switchNote = "当前文档正在切换到该文件（命令队列异步执行，稍后 get_status 可确认）。";
+                        }
+                        catch (System.Exception ex)
+                        {
+                            Mcp.Log.Error("save_as", "切换当前文档失败：" + ex.Message);
+                            switchNote = "注意：文件已写出，但当前文档没能切过去（仍带 *），" +
+                                         "要接着编辑请用 open_document 打开它。";
+                        }
+
+                        return $"已保存到：{path}（格式 {v}）。{switchNote}";
                     }
                     catch (Autodesk.AutoCAD.Runtime.Exception ex)
                     {
