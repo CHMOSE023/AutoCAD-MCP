@@ -76,6 +76,108 @@ namespace AcadMcp.Acad
             return Append(el, layer);
         }
 
+        /// <summary>
+        /// 画样条曲线（NURBS）。useControlPoints=false 走拟合点（曲线严格穿过每个点，等价 SPLINE 命令的“拟合”），
+        /// =true 走控制点（曲线被控制点拉扯、一般不经过它们，等价 SPLINE 的 CV / “控制点”方式）。
+        /// </summary>
+        public static string AddSpline(
+            IReadOnlyList<(double X, double Y)> pts, bool useControlPoints, bool closed, int degree,
+            double fitTolerance, (double X, double Y)? startTangent, (double X, double Y)? endTangent, string? layer)
+        {
+            if (degree < 1 || degree > 11)
+                throw new ArgumentException("degree（阶次）必须在 1..11，常用 3（三次样条）。");
+            if (fitTolerance < 0)
+                throw new ArgumentException("fitTolerance 不能为负。");
+            if (startTangent.HasValue != endTangent.HasValue)
+                throw new ArgumentException("起点切向与终点切向必须成对给出（四个分量一起传，或都不传）。");
+
+            var p3 = new Point3dCollection();
+            foreach (var p in pts) p3.Add(new Point3d(p.X, p.Y, 0));
+
+            Spline sp = useControlPoints
+                ? FromControlPoints(p3, closed, degree, startTangent.HasValue)
+                : FromFitPoints(p3, closed, degree, fitTolerance, startTangent, endTangent);
+
+            return Append(sp, layer);
+        }
+
+        /// <summary>拟合点方式：曲线严格穿过每个点。闭合走 isPeriodic 构造，切向走带切向的重载。</summary>
+        private static Spline FromFitPoints(
+            Point3dCollection p3, bool closed, int degree, double fitTolerance,
+            (double X, double Y)? startTangent, (double X, double Y)? endTangent)
+        {
+            if (p3.Count < 2)
+                throw new ArgumentException("拟合点方式下至少需要 2 个点。");
+
+            if (startTangent.HasValue)
+            {
+                if (closed)
+                    throw new ArgumentException("闭合样条不能同时指定起终点切向，二选一。");
+                var st = new Vector3d(startTangent.Value.X, startTangent.Value.Y, 0);
+                var et = new Vector3d(endTangent!.Value.X, endTangent.Value.Y, 0);
+                if (st.Length < 1e-9 || et.Length < 1e-9)
+                    throw new ArgumentException("切向向量不能为零。");
+                return new Spline(p3, st, et, KnotParameterizationEnum.Chord, degree, fitTolerance);
+            }
+
+            if (closed && p3.Count < 3)
+                throw new ArgumentException("闭合样条至少需要 3 个点。");
+
+            // 第二个参数是 isPeriodic：闭合样条不要把起点重复写在末尾，AutoCAD 自己接上
+            return new Spline(p3, closed, KnotParameterizationEnum.Chord, degree, fitTolerance);
+        }
+
+        /// <summary>控制点（CV）方式：手工造节点矢量。开口用夹紧节点；闭合把首 degree 个控制点绕接到末尾再配均匀节点。</summary>
+        private static Spline FromControlPoints(Point3dCollection p3, bool closed, int degree, bool hasTangent)
+        {
+            int n = p3.Count;
+            if (hasTangent)
+                throw new ArgumentException("切向只对拟合点方式（method=fit）有效，控制点方式请去掉切向参数。");
+
+            // 闭合时首尾会绕接（wrap），所以比开口少要一个点
+            int least = closed ? degree : degree + 1;
+            if (n < least)
+                throw new ArgumentException(
+                    $"控制点方式下点数至少为 {least}，当前只有 {n} 个。降低 degree 或多给几个点。");
+
+            var cps = new Point3dCollection();
+            for (int i = 0; i < n; i++) cps.Add(p3[i]);
+
+            var knots = new DoubleCollection();
+            if (closed)
+            {
+                // 闭合：把首 degree 个控制点接到末尾（wrap），再配 0,1,2,… 的均匀节点。
+                // 有效参数区间是 [t_degree, t_(n+degree)]，正好跑满一圈、首尾点重合，AutoCAD 会自己置上 closed 位。
+                //
+                // 不要指望构造函数的 closed / periodic 两个参数：实测（AutoCAD 2020）传 true 会被直接忽略，
+                // AutoCAD 只认节点矢量，把有效区间外的部分裁掉 —— 4 个控制点配 0..7 的均匀节点，
+                // 有效区间只剩 [3,4]，曲线退化成一小段（DXF 70 位也不会置 closed）。
+                for (int i = 0; i < degree; i++) cps.Add(p3[i]);
+                int m = cps.Count;                              // = n + degree
+                for (int i = 0; i <= m + degree; i++) knots.Add(i);   // 共 n + 2*degree + 1 个
+            }
+            else
+            {
+                // 夹紧（clamped）节点矢量：两端各重复 degree 次，中间 0..n-degree，合计 n+degree+1 个
+                for (int i = 0; i < degree; i++) knots.Add(0.0);
+                for (int i = 0; i <= n - degree; i++) knots.Add(i);
+                for (int i = 0; i < degree; i++) knots.Add(n - degree);
+            }
+
+            var weights = new DoubleCollection();
+            for (int i = 0; i < cps.Count; i++) weights.Add(1.0);
+
+            try
+            {
+                return new Spline(degree, false, false, false, cps, knots, weights, 1e-9, 1e-10);
+            }
+            catch (Autodesk.AutoCAD.Runtime.Exception ex)
+            {
+                throw new InvalidOperationException(
+                    $"按控制点创建样条失败（{ex.ErrorStatus}）。可改用拟合点方式：method=\"fit\"。", ex);
+            }
+        }
+
         public static string AddPoint(double x, double y, string? layer)
             => Append(new DBPoint(new Point3d(x, y, 0)), layer);
 

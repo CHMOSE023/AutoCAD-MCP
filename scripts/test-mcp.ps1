@@ -152,6 +152,107 @@ if ($hr -match '^[0-9A-Fa-f]+$') {
 }
 Call-Tool "measure_distance" @{ x1 = 0; y1 = 0; x2 = 3000; y2 = 4000 } | Out-Null   # expect distance 5000
 
+Write-Host "`n== P3.5: linetypes / layer lineweight =="
+Call-Tool "list_linetypes" | Out-Null
+Call-Tool "create_layer" @{ name = "MCP-AXIS"; colorIndex = 4; linetype = "CENTER"; lineWeight = 0.13 } | Out-Null
+Call-Tool "create_layer" @{ name = "MCP-WALL"; colorIndex = 2; lineWeight = 0.7 }                       | Out-Null
+Call-Tool "create_layer" @{ name = "MCP-ROOM"; colorIndex = 3 }                                         | Out-Null
+Call-Tool "list_layers" | Out-Null   # expect MCP-AXIS = CENTER / 0.13, MCP-WALL = 0.70
+
+Write-Host "`n== P3.5: array_rect / array_polar =="
+# a 400x400 square as the array seed (one column / one parking stall)
+$seed = (Call-Tool "draw_polyline" @{ points = @(@(0,20000), @(400,20000), @(400,20400), @(0,20400)); closed = $true; layer = "MCP-WALL" }) -replace "handle=", ""
+$plBefore = ((Call-Tool "query_entities" @{ type = "LWPOLYLINE" }) | ConvertFrom-Json).matched
+if ($seed -match '^[0-9A-Fa-f]+$') {
+    Call-Tool "array_rect" @{ handle = $seed; rows = 3; cols = 4; rowSpacing = 1000; colSpacing = 800 } | Out-Null
+}
+$plAfter = ((Call-Tool "query_entities" @{ type = "LWPOLYLINE" }) | ConvertFrom-Json).matched
+Write-Host "  lwpolylines: before=$plBefore after=$plAfter (3x4 keeps the source, expect +11)"
+
+$spoke = (Call-Tool "draw_line" @{ x1 = 15000; y1 = 25000; x2 = 16500; y2 = 25000 }) -replace "handle=", ""
+if ($spoke -match '^[0-9A-Fa-f]+$') {
+    Call-Tool "array_polar" @{ handle = $spoke; centerX = 15000; centerY = 25000; count = 8; rotateItems = $true } | Out-Null
+}
+
+Write-Host "`n== P3.5: set_entity_layer =="
+# a line drawn on the current layer, then moved to MCP-AXIS - the "102 blocks on the wrong layer" fix
+$stray = (Call-Tool "draw_line" @{ x1 = 0; y1 = 28000; x2 = 3000; y2 = 28000 }) -replace "handle=", ""
+if ($stray -match '^[0-9A-Fa-f]+$') {
+    Call-Tool "set_entity_layer" @{ handle = $stray; layer = "MCP-AXIS"; byLayerColor = $true } | Out-Null
+    Call-Tool "get_entity" @{ handle = $stray } | Out-Null   # expect layer = MCP-AXIS
+}
+
+Write-Host "`n== P3.5: block layer + bboxFromBase =="
+$bsrc = (Call-Tool "draw_polyline" @{ points = @(@(10000,20000), @(12500,20000), @(12500,25000), @(10000,25000)); closed = $true }) -replace "handle=", ""
+if ($bsrc -match '^[0-9A-Fa-f]+$') {
+    # base point sits on the middle of the bottom edge, so bboxFromBase should read x -1250..1250, y 0..5000
+    Call-Tool "define_block" @{ name = "MCP-STALL"; entityHandles = @($bsrc); baseX = 11250; baseY = 20000; keepSource = $false } | Out-Null
+    Call-Tool "list_blocks"  | Out-Null
+    Call-Tool "insert_block" @{ name = "MCP-STALL"; x = 20000; y = 20000; layer = "MCP-WALL" } | Out-Null
+    $ins = ((Call-Tool "query_entities" @{ type = "INSERT"; layer = "MCP-WALL" }) | ConvertFrom-Json).matched
+    Write-Host "  block refs on MCP-WALL: $ins (expect >= 1; 0 means the layer arg was ignored)"
+}
+
+Write-Host "`n== P3.5: check_overlap / check_inside / check_adjacency =="
+# rooms A|B share an edge; C is pushed 1000 into B on purpose, and sticks 2000 out of the outline
+$rA = (Call-Tool "draw_polyline" @{ points = @(@(0,30000), @(4000,30000), @(4000,33000), @(0,33000));      closed = $true; layer = "MCP-ROOM" }) -replace "handle=", ""
+$rB = (Call-Tool "draw_polyline" @{ points = @(@(4000,30000), @(8000,30000), @(8000,33000), @(4000,33000)); closed = $true; layer = "MCP-ROOM" }) -replace "handle=", ""
+$rC = (Call-Tool "draw_polyline" @{ points = @(@(7000,30000), @(11000,30000), @(11000,33000), @(7000,33000)); closed = $true; layer = "MCP-ROOM" }) -replace "handle=", ""
+# outline stays off MCP-ROOM so it is not part of the checked set
+$outline = (Call-Tool "draw_polyline" @{ points = @(@(-500,29500), @(9000,29500), @(9000,33500), @(-500,33500)); closed = $true }) -replace "handle=", ""
+
+Call-Tool "check_overlap" @{ layer = "MCP-ROOM" } | Out-Null   # expect FAIL: B x C overlap 1000 x 3000
+if ($outline -match '^[0-9A-Fa-f]+$') {
+    Call-Tool "check_inside" @{ layer = "MCP-ROOM"; boundary = $outline } | Out-Null   # expect FAIL: C out by 2000 in +X
+}
+if (($rA -match '^[0-9A-Fa-f]+$') -and ($rB -match '^[0-9A-Fa-f]+$')) {
+    Call-Tool "check_adjacency" @{ handleA = $rA; handleB = $rB }             | Out-Null   # expect PASS (shared edge)
+}
+if (($rA -match '^[0-9A-Fa-f]+$') -and ($rC -match '^[0-9A-Fa-f]+$')) {
+    Call-Tool "check_adjacency" @{ handleA = $rA; handleB = $rC; gap = 100 }  | Out-Null   # expect FAIL, actual gap 3000
+}
+if (($rB -match '^[0-9A-Fa-f]+$') -and ($rC -match '^[0-9A-Fa-f]+$')) {
+    Call-Tool "check_adjacency" @{ handleA = $rB; handleB = $rC }             | Out-Null   # expect OVERLAP, not PASS
+}
+
+Write-Host "`n== P3.6: draw_spline =="
+$spBefore = ((Call-Tool "query_entities" @{ type = "Spline" }) | ConvertFrom-Json).matched
+
+# fit points (default): the curve passes through every point
+$sp1 = (Call-Tool "draw_spline" @{ points = @(@(16000,4000), @(17000,5200), @(18000,3800), @(19000,5000), @(20000,4200)) }) -replace "handle=", ""
+# fit points + closed -> isPeriodic ctor; do NOT repeat the first point at the end
+$sp2 = (Call-Tool "draw_spline" @{ points = @(@(16000,7000), @(17500,8200), @(19000,7000), @(17500,6000)); closed = $true }) -replace "handle=", ""
+# fit points + start/end tangents (all four components must be given together)
+$sp3 = (Call-Tool "draw_spline" @{ points = @(@(21000,4000), @(22000,5200), @(23000,4000)); startTangentX = 1; startTangentY = 1; endTangentX = 1; endTangentY = -1 }) -replace "handle=", ""
+# control points, open -> clamped knot vector; needs at least degree+1 points
+$sp4 = (Call-Tool "draw_spline" @{ method = "cv"; points = @(@(16000,10000), @(17000,11500), @(18000,9500), @(19000,11000), @(20000,10000)); degree = 3 }) -replace "handle=", ""
+# control points + closed -> first "degree" control points wrapped onto the end + uniform knots
+$sp5 = (Call-Tool "draw_spline" @{ method = "cv"; points = @(@(21000,10000), @(23000,10000), @(23000,12000), @(21000,12000)); degree = 3; closed = $true }) -replace "handle=", ""
+
+if ($sp2 -match '^[0-9A-Fa-f]+$') { Call-Tool "get_entity" @{ handle = $sp2 } | Out-Null }   # expect closed=true
+if ($sp4 -match '^[0-9A-Fa-f]+$') { Call-Tool "get_entity" @{ handle = $sp4 } | Out-Null }
+
+# A closed cv spline must span its whole control polygon (21000..23000 x 10000..12000).
+# Getting this wrong is silent: a bad knot vector yields a valid but ~250-wide sliver, no error raised.
+if ($sp5 -match '^[0-9A-Fa-f]+$') {
+    $e5 = (Call-Tool "get_entity" @{ handle = $sp5 }) | ConvertFrom-Json
+    if ($e5.bbox -match '^\s*(-?[\d.]+),(-?[\d.]+)\s*\.\.\s*(-?[\d.]+),(-?[\d.]+)') {
+        $w = [double]$matches[3] - [double]$matches[1]
+        $h = [double]$matches[4] - [double]$matches[2]
+        $verdict = if (($w -ge 1500) -and ($h -ge 1500)) { "ok " } else { "ERR" }
+        Write-Host ("  {0} cv+closed spans {1} x {2} (expect about 2000 x 2000; a few hundred means the knot vector collapsed)" -f $verdict, [math]::Round($w), [math]::Round($h))
+    }
+}
+
+$spAfter = ((Call-Tool "query_entities" @{ type = "Spline" }) | ConvertFrom-Json).matched
+Write-Host "  splines: before=$spBefore after=$spAfter (expect +5)"
+
+Write-Host "  -- these four are expected to come back ERR --"
+Call-Tool "draw_spline" @{ method = "cv"; points = @(@(0,0), @(100,100)); degree = 3 } | Out-Null   # cv needs degree+1 points
+Call-Tool "draw_spline" @{ method = "spiral"; points = @(@(0,0), @(100,100)) }         | Out-Null   # method must be fit or cv
+Call-Tool "draw_spline" @{ points = @(@(0,0), @(100,100)); startTangentX = 1 }         | Out-Null   # tangent components come in pairs
+Call-Tool "draw_spline" @{ points = @(@(0,0), @(100,100)); degree = 99 }               | Out-Null   # degree out of 1..11
+
 Call-Tool "zoom_extents" | Out-Null
 $cap2 = Invoke-Mcp -Method "tools/call" -Params @{ name = "capture_view"; arguments = @{ maxWidth = 1400 } }
 $img2 = $cap2.result.content | Where-Object { $_.type -eq "image" }

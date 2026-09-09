@@ -1,6 +1,6 @@
 # AutoCAD MCP 插件
 
-让 **Claude Code**（或任何 MCP 客户端）通过 MCP 协议操作 AutoCAD。**84 个工具**，AutoCAD 2014 实测通过。
+让 **Claude Code**（或任何 MCP 客户端）通过 MCP 协议操作 AutoCAD。**85 个工具**，AutoCAD 2014 实测通过。
 
 一个 .NET AutoCAD 插件（NETLOAD 进 AutoCAD），插件内嵌一个 HTTP 服务，按 **MCP
 Streamable HTTP** 规范对外暴露工具。Claude Code 以 `type: http` 直连
@@ -9,7 +9,7 @@ Streamable HTTP** 规范对外暴露工具。Claude Code 以 `type: http` 直连
 ```
 Claude Code ──HTTP /mcp──▶ AcadMcp.Plugin.dll (NETLOAD 进 AutoCAD)
                              ├─ HttpListener 127.0.0.1:7130 + 手写 MCP JSON-RPC
-                             ├─ 84 个工具
+                             ├─ 85 个工具
                              ├─ 主线程调度 (Application.Idle 队列)
                              ├─ 命令队列桥 (SendStringToExecute + 结果文件轮询)
                              ├─ 安全网（只读模式 / 备份 / mark-rollback / token）
@@ -114,7 +114,7 @@ claude mcp add --transport http autocad http://127.0.0.1:7130/mcp
 
 ---
 
-## 4. 工具清单（84 个）
+## 4. 工具清单（85 个）
 
 **P0 · 基础绘图闭环**
 
@@ -226,6 +226,15 @@ claude mcp add --transport http autocad http://127.0.0.1:7130/mcp
 
 **`list_blocks` 增加 `bboxFromBase`**：块相对基点的包围盒。
 插入点给的是基点位置，块往哪个方向长得看它 —— 基点在底边的车位块最容易插反。
+
+**P3.6 · 样条曲线**
+
+| 工具 | 类别 | 说明 |
+|---|---|---|
+| `draw_spline` | 绘制 | 样条曲线（NURBS）。默认 `method:"fit"` 拟合点——曲线严格穿过给的每个点，等高线 / 河道 / 管线走向 / 自由曲线用它；`method:"cv"` 是控制点方式，曲线不经过控制点、形状更平滑（点数至少 `degree+1`，`closed=true` 时 `degree` 个即可）。`closed` 闭合、`degree` 阶次（默认 3）、`fitTolerance` 拟合公差、起终点切向（仅拟合点方式，四个分量成对给） |
+
+**拟合点还是控制点**：给的是「必须经过的位置」（实测点、道路中线控制点）就用 `fit`；
+给的是「大致把曲线拉成这个形状」就用 `cv`。闭合和切向不能同时用 —— 闭合样条的接缝处切向由 AutoCAD 自己接。
 
 **P2.5 · 安全网**
 
@@ -363,6 +372,6 @@ D:\AutoCADMCP\
 │  ├─ Mcp/                         HTTP + JSON-RPC + 工具注册 + 日志 + 安全网（Safety.cs）
 │  ├─ Acad/                        AutoCAD 操作：绘制/修改/编辑/标注/填充/测量/查询/图层/图块/截图/视图/LISP
 │  │                               P3：Layouts / Plot / Xrefs / Docs / Sysvars / Units
-│  └─ Tools/ToolCatalog.cs         84 个工具的定义
+│  └─ Tools/ToolCatalog.cs         85 个工具的定义
 └─ test/AcadMcp.ProtocolTest/      协议一致性测试（链接 Mcp/*.cs，不依赖 AutoCAD）
 ```

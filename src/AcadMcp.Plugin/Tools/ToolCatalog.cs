@@ -381,6 +381,37 @@ namespace AcadMcp.Tools
                     Args.Num(a, "cx"), Args.Num(a, "cy"), Args.Num(a, "majorX"), Args.Num(a, "majorY"),
                     Args.Num(a, "ratio"), Args.StrOrNull(a, "layer")))));
 
+            tools.Add(new Tool("draw_spline",
+                "画样条曲线（NURBS）。默认 method=\"fit\" 拟合点方式——曲线严格穿过给的每个点，" +
+                "画等高线 / 河道 / 管线走向 / 自由曲线用这个；method=\"cv\" 是控制点方式，曲线被控制点拉扯、" +
+                "一般不经过它们，形状更平滑可控，点数至少 degree+1 个（closed=true 时 degree 个即可）。可选起终点切向（仅拟合点方式，成对给）。",
+                With(Object(
+                        P("method", "string", "fit=拟合点（默认，穿过每个点）；cv=控制点"),
+                        P("closed", "boolean", "是否闭合成环，默认 false"),
+                        P("degree", "integer", "阶次，默认 3（三次样条），范围 1-11"),
+                        P("fitTolerance", "number", "拟合公差，默认 0（严格穿过每个点）；仅拟合点方式有效"),
+                        P("startTangentX", "number", "起点切向 X，可选（与 startTangentY / 终点切向成对给）"),
+                        P("startTangentY", "number", "起点切向 Y，可选"),
+                        P("endTangentX", "number", "终点切向 X，可选"),
+                        P("endTangentY", "number", "终点切向 Y，可选"),
+                        P("layer", "string", "目标图层，可选")),
+                    "points", PointArray("型值点数组 [[x,y],...]；拟合点方式至少 2 个，控制点方式至少 degree+1 个（closed=true 时 degree 个即可）")),
+                a =>
+                {
+                    var method = (Args.StrOrNull(a, "method") ?? "fit").Trim().ToLowerInvariant();
+                    bool cv = method == "cv" || method == "control" || method == "controlpoints";
+                    if (!cv && method != "fit")
+                        throw new McpParamException("method 只能是 fit（拟合点）或 cv（控制点）");
+
+                    var st = TangentOrNull(a, "startTangentX", "startTangentY");
+                    var et = TangentOrNull(a, "endTangentX", "endTangentY");
+                    var pts = PtList(a, "points");
+
+                    return MainThread.Invoke(() => "handle=" + Draw.AddSpline(
+                        pts, cv, Args.BoolOr(a, "closed", false), Args.IntOr(a, "degree", 3),
+                        Args.NumOr(a, "fitTolerance", 0), st, et, Args.StrOrNull(a, "layer")));
+                }));
+
             tools.Add(new Tool("draw_point",
                 "画一个点（DBPoint）。",
                 Object(P("x", "number", "X", true), P("y", "number", "Y", true), P("layer", "string", "目标图层，可选")),
@@ -899,6 +930,17 @@ namespace AcadMcp.Tools
             if (list.Count == 0)
                 throw new McpParamException("需要 handle / handles / useSelection");
             return list;
+        }
+
+        /// <summary>取一对切向分量：两个都没给返回 null，只给一个报错。</summary>
+        private static (double, double)? TangentOrNull(JObject a, string keyX, string keyY)
+        {
+            var x = Args.NumOrNull(a, keyX);
+            var y = Args.NumOrNull(a, keyY);
+            if (x == null && y == null) return null;
+            if (x == null || y == null)
+                throw new McpParamException($"{keyX} 与 {keyY} 必须同时给出");
+            return (x.Value, y.Value);
         }
 
         /// <summary>取字符串数组参数（缺失返回空 list）。</summary>
