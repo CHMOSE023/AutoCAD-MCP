@@ -1,48 +1,27 @@
 <Project Sdk="Microsoft.NET.Sdk">
-
-  <PropertyGroup>
-    <TargetFramework>net48</TargetFramework>
-    <PlatformTarget>x64</PlatformTarget>
-    <LangVersion>latest</LangVersion>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>disable</ImplicitUsings>
-    <AssemblyName>AcadMcp.Plugin</AssemblyName>
-    <RootNamespace>AcadMcp</RootNamespace>
-    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
-    <Deterministic>true</Deterministic>
-    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
-    <Version>0.1.0</Version>
-
-    <!-- AutoCAD 托管程序集目录。换 AutoCAD 版本时改这里（或在命令行 -p:AcadDir=... 覆盖）。 -->
-    <AcadDir Condition="'$(AcadDir)' == ''">C:\Program Files\Autodesk\AutoCAD 2020\</AcadDir>
-  </PropertyGroup>
-
-  <ItemGroup>
-    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3">
-      <PrivateAssets>all</PrivateAssets>
-    </PackageReference>
-    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
-  </ItemGroup>
-
-  <!-- .NET Framework 自带程序集（capture_view 用 GDI 截图） -->
-  <ItemGroup>
-    <Reference Include="System.Drawing" />
-  </ItemGroup>
-
-  <!-- AutoCAD ObjectARX .NET API。Private=false：不复制到输出，运行时由 AutoCAD 提供。 -->
-  <ItemGroup>
-    <Reference Include="accoremgd">
-      <HintPath>$(AcadDir)accoremgd.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="acdbmgd">
-      <HintPath>$(AcadDir)acdbmgd.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="acmgd">
-      <HintPath>$(AcadDir)acmgd.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-  </ItemGroup>
-
+		<PropertyGroup>
+				<TargetFramework>net472</TargetFramework>
+				<PlatformTarget>x64</PlatformTarget>
+				<LangVersion>latest</LangVersion>
+				<Nullable>enable</Nullable>
+				<ImplicitUsings>disable</ImplicitUsings>
+				<AssemblyName>AcadMcp.Plugin</AssemblyName>
+				<RootNamespace>AcadMcp</RootNamespace>
+				<AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+				<Deterministic>true</Deterministic>
+				<CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+				<Version>0.1.0</Version>
+		</PropertyGroup> 
+		<ItemGroup>  
+				<PackageReference Include="AutoCAD.NET" ExcludeAssets="runtime">
+						<Version>20.0.0</Version>
+				</PackageReference> 
+				<PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3">
+						<PrivateAssets>all</PrivateAssets>
+				</PackageReference> 
+				<PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+		</ItemGroup> 
+		<ItemGroup>
+				<Reference Include="System.Drawing" />
+		</ItemGroup>
 </Project>

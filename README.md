@@ -1,22 +1,20 @@
 # AutoCAD MCP 插件
 
-让 **Claude Code**（或任何 MCP 客户端）通过 MCP 协议操作 AutoCAD。**85 个工具**，AutoCAD 2014 实测通过。
+让 **Claude Code**（或任何 Agent 客户端）通过 MCP 协议操作 AutoCAD。 
 
 一个 .NET AutoCAD 插件（NETLOAD 进 AutoCAD），插件内嵌一个 HTTP 服务，按 **MCP
-Streamable HTTP** 规范对外暴露工具。Claude Code 以 `type: http` 直连
-`http://127.0.0.1:7130/mcp`。没有独立进程、没有 socket 桥接。
+Streamable HTTP** 规范对外暴露工具。Agent 以 `type: http` 直连
+`http://127.0.0.1:7130/mcp`。 
 
 ```
-Claude Code ──HTTP /mcp──▶ AcadMcp.Plugin.dll (NETLOAD 进 AutoCAD)
+Agent ──HTTP /mcp──▶ AcadMcp.Plugin.dll (NETLOAD 进 AutoCAD)
                              ├─ HttpListener 127.0.0.1:7130 + 手写 MCP JSON-RPC
-                             ├─ 85 个工具
+                             ├─ 工具
                              ├─ 主线程调度 (Application.Idle 队列)
                              ├─ 命令队列桥 (SendStringToExecute + 结果文件轮询)
                              ├─ 安全网（只读模式 / 备份 / mark-rollback / token）
-                             └─ ObjectARX .NET API / acedEvaluateLisp → DWG
-```
-
-详见 [ARCHITECTURE.md](ARCHITECTURE.md)（总体架构与后续演进）。
+                             └─ AutoCAD.NET API / acedEvaluateLisp → DWG
+``` 
 
 ---
 
@@ -24,10 +22,9 @@ Claude Code ──HTTP /mcp──▶ AcadMcp.Plugin.dll (NETLOAD 进 AutoCAD)
 
 | 项 | 要求 |
 |---|---|
-| AutoCAD | 2020（其它版本改 `AcadDir` 后重编，见下） |
-| .NET Framework | 4.8（Windows 11 自带） |
-| 构建 | .NET SDK 8+（本仓库用 10.0.400 验证），**无需 Visual Studio** |
-| Claude Code | 支持 `--transport http` 的版本 |
+| AutoCAD | 2014+  |
+| .NET Framework | 4.72 |
+| 构建 | .NET SDK 8+| 
 
 ---
 
@@ -40,13 +37,8 @@ dotnet build src/AcadMcp.Plugin/AcadMcp.Plugin.csproj -c Release
 产物在 `src/AcadMcp.Plugin/bin/Release/`：
 
 - `AcadMcp.Plugin.dll` — 插件本体
-- `Newtonsoft.Json.dll` — 唯一运行时依赖（需与插件放在同一目录）
-
-**换 AutoCAD 版本**：编译时传参，例如 2018：
-
-```bash
-dotnet build src/AcadMcp.Plugin/AcadMcp.Plugin.csproj -c Release -p:AcadDir="C:\Program Files\Autodesk\AutoCAD 2018\"
-```
+- `Newtonsoft.Json.dll` — 运行时依赖（需与插件放在同一目录）
+ 
 
 ---
 
@@ -114,9 +106,9 @@ claude mcp add --transport http autocad http://127.0.0.1:7130/mcp
 
 ---
 
-## 4. 工具清单（85 个）
+## 4. 工具清单 
 
-**P0 · 基础绘图闭环**
+**基础绘图闭环**
 
 | 工具 | 类别 | 说明 |
 |---|---|---|
@@ -131,7 +123,7 @@ claude mcp add --transport http autocad http://127.0.0.1:7130/mcp
 | `save` | 文档 | 保存当前图形（QSAVE，新图形需先另存） |
 | `run_command` | 逃生舱 | 【危险】向命令行发送任意命令串（异步） |
 
-**P1 · 视觉反馈 + 修改 + 图块**
+**视觉反馈 + 修改 + 图块**
 
 | 工具 | 类别 | 说明 |
 |---|---|---|
@@ -149,7 +141,7 @@ claude mcp add --transport http autocad http://127.0.0.1:7130/mcp
 | `get_log` | 只读 | 返回今天日志最后 N 行（自查刚才发生了什么） |
 | `eval_lisp` | 逃生舱 | 【危险 · 任意代码执行】同步执行 AutoLISP 表达式并返回其值。**默认关闭**，见下 |
 
-**P2 · 工具广度补全**
+**工具广度补全**
 
 | 工具 | 类别 | 说明 |
 |---|---|---|
@@ -167,7 +159,7 @@ claude mcp add --transport http autocad http://127.0.0.1:7130/mcp
 | `measure_distance` / `measure_area` | 测量 | 两点距离 / 闭合实体面积周长 |
 | `define_block` | 图块 | 用一组实体定义新图块（可原位替换为块引用） |
 
-**P3 · 布局出图 / 单位 / 外部参照 / 多文档**
+**布局出图 / 单位 / 外部参照 / 多文档**
 
 | 工具 | 类别 | 说明 |
 |---|---|---|
@@ -353,15 +345,13 @@ P2 绘制补全 / 修改 / 标注 / 填充 / 选择集 / 测量 → P2.5 `mark`+
   另：`display` 的打印区域按当前视口宽高比算（绘图区被命令行挤扁时只剩 285x89mm），本来也不可靠
 - 首次 `plot_pdf` 要等打印引擎冷启动（实测 15~90 秒），之后每次约 0.2 秒
 - `add_viewport` 创建视口时会先切到目标布局（视口的"打开"状态只在其所属布局为当前布局时可靠生效）
-
-后续路线见 [ARCHITECTURE.md](ARCHITECTURE.md) 第十二节 / 附录 C。
-
+ 
 ---
 
 ## 目录结构
 
 ```
-D:\AutoCADMCP\
+AutoCADMCP
 ├─ ARCHITECTURE.md                 总体架构
 ├─ README.md                       本文件
 ├─ .mcp.json.example               Claude Code 配置样例
@@ -371,7 +361,7 @@ D:\AutoCADMCP\
 │  ├─ PluginEntry.cs               入口 + 命令 MCPSTART/MCPSTOP/MCPSTATUS
 │  ├─ Mcp/                         HTTP + JSON-RPC + 工具注册 + 日志 + 安全网（Safety.cs）
 │  ├─ Acad/                        AutoCAD 操作：绘制/修改/编辑/标注/填充/测量/查询/图层/图块/截图/视图/LISP
-│  │                               P3：Layouts / Plot / Xrefs / Docs / Sysvars / Units
-│  └─ Tools/ToolCatalog.cs         85 个工具的定义
+│  │                               Layouts / Plot / Xrefs / Docs / Sysvars / Units
+│  └─ Tools/ToolCatalog.cs         工具的定义
 └─ test/AcadMcp.ProtocolTest/      协议一致性测试（链接 Mcp/*.cs，不依赖 AutoCAD）
 ```

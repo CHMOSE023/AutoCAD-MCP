@@ -19,7 +19,13 @@ namespace AcadMcp
     public sealed class PluginEntry : IExtensionApplication
     {
         private const string Host = "127.0.0.1";
-        private const int Port = 7130;
+
+        /// <summary>首选端口。被占用时依次向后探测，让多开的 AutoCAD 实例自动错开。</summary>
+        private const int BasePort = 7130;
+
+        /// <summary>最多探测几个端口（BasePort .. BasePort + PortProbeCount - 1）。</summary>
+        private const int PortProbeCount = 10;
+
         private const string Path = "/mcp";
 
         private static HttpServer? _server;
@@ -124,7 +130,7 @@ namespace AcadMcp
             if (t != null)
             {
                 Print("当前 HTTP token：" + t);
-                Print("接入：claude mcp add --transport http autocad " + (_server?.Endpoint ?? $"http://{Host}:{Port}{Path}") +
+                Print("接入：claude mcp add --transport http autocad " + (_server?.Endpoint ?? $"http://{Host}:{BasePort}{Path}") +
                       " --header \"Authorization: Bearer " + t + "\"");
                 Print("清除：MCPTOKENOFF");
             }
@@ -133,7 +139,7 @@ namespace AcadMcp
                 var nt = Mcp.Safety.GenerateToken();
                 Print("已生成 HTTP token：" + nt);
                 Print("现在所有请求必须带 Authorization: Bearer <token>。");
-                Print("接入：claude mcp add --transport http autocad " + (_server?.Endpoint ?? $"http://{Host}:{Port}{Path}") +
+                Print("接入：claude mcp add --transport http autocad " + (_server?.Endpoint ?? $"http://{Host}:{BasePort}{Path}") +
                       " --header \"Authorization: Bearer " + nt + "\"");
             }
         }
@@ -152,8 +158,7 @@ namespace AcadMcp
                 Acad.MainThread.Invoke(() => AcApp.DocumentManager.MdiActiveDocument?.Name);
 
             var dispatcher = new McpDispatcher(ToolCatalog.Build());
-            var server = new HttpServer(Host, Port, Path, dispatcher);
-            server.Start();
+            var server = StartListener(dispatcher);
             _server = server;
 
             Acad.Lisp.WarmUpCommandQueue();
@@ -163,6 +168,40 @@ namespace AcadMcp
             Print($"接入 Claude Code：claude mcp add --transport http autocad {server.Endpoint}");
             Print($"日志：{Log.CurrentFile}");
             if (Mcp.Safety.AuthRequired) Print("已启用 token 鉴权（MCPTOKEN 查看）。");
+        }
+
+        /// <summary>
+        /// 从 BasePort 起逐个探测可用端口并启动监听。
+        /// HttpListener 的前缀注册在 http.sys 里是全机独占的，多开 AutoCAD 时第二个实例
+        /// 必然撞车（错误 183）；这里换个端口重试即可。权限类错误（5）不重试 —— 换端口治不了。
+        /// </summary>
+        private static HttpServer StartListener(McpDispatcher dispatcher)
+        {
+            for (int port = BasePort; port < BasePort + PortProbeCount; port++)
+            {
+                var server = new HttpServer(Host, port, Path, dispatcher);
+                try
+                {
+                    server.Start();
+                    if (port != BasePort)
+                        Print($"端口 {BasePort} 已被占用（多半是另一个 AutoCAD 实例），改用 {port}。");
+                    return server;
+                }
+                catch (PortInUseException)
+                {
+                    server.Dispose();
+                    // 继续试下一个端口
+                }
+                catch
+                {
+                    server.Dispose();
+                    throw;
+                }
+            }
+
+            throw new InvalidOperationException(
+                $"端口 {BasePort}-{BasePort + PortProbeCount - 1} 全部被占用，无法启动。\n" +
+                $"关掉多余的 AutoCAD 实例后执行 MCPSTART 重试。");
         }
 
         /// <summary>写命令行提示。只应在 AutoCAD 主线程调用。</summary>

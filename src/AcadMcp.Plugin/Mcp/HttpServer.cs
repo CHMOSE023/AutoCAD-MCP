@@ -14,8 +14,15 @@ namespace AcadMcp.Mcp
     /// </summary>
     internal sealed class HttpServer : IDisposable
     {
+        /// <summary>ERROR_ALREADY_EXISTS：前缀已被别的进程注册。</summary>
+        private const int ErrorAlreadyExists = 183;
+
+        /// <summary>ERROR_ACCESS_DENIED：当前用户无权注册该前缀。</summary>
+        private const int ErrorAccessDenied = 5;
+
         private readonly string _prefix;      // http://127.0.0.1:7130/
         private readonly string _path;        // /mcp
+        private readonly int _port;
         private readonly McpDispatcher _dispatcher;
 
         private HttpListener? _listener;
@@ -26,10 +33,12 @@ namespace AcadMcp.Mcp
         {
             _prefix = $"http://{host}:{port}/";
             _path = path.StartsWith("/") ? path : "/" + path;
+            _port = port;
             _dispatcher = dispatcher;
         }
 
         public string Endpoint => _prefix.TrimEnd('/') + _path;
+        public int Port => _port;
         public bool IsRunning => _running;
 
         public void Start()
@@ -44,10 +53,21 @@ namespace AcadMcp.Mcp
             }
             catch (HttpListenerException ex)
             {
-                throw new InvalidOperationException(
-                    $"无法在 {_prefix} 监听：{ex.Message}\n" +
-                    $"若为权限问题，用管理员命令行执行一次：\n" +
-                    $"  netsh http add urlacl url={_prefix} user=%USERNAME%", ex);
+                try { listener.Close(); } catch { }
+
+                // 183：前缀已被本机另一个进程注册（典型是多开的 AutoCAD）。换个端口就能起来，
+                // 所以交给调用方去探测下一个端口 —— 不要在这里劝用户跑 netsh，那治的是 5 不是 183。
+                if (ex.ErrorCode == ErrorAlreadyExists)
+                    throw new PortInUseException(_prefix, ex);
+
+                // 5：http.sys 未授权当前用户注册该前缀。换端口无济于事，必须加 urlacl。
+                if (ex.ErrorCode == ErrorAccessDenied)
+                    throw new InvalidOperationException(
+                        $"无法在 {_prefix} 监听：{ex.Message}\n" +
+                        $"权限不足，用管理员命令行执行一次：\n" +
+                        $"  netsh http add urlacl url={_prefix} user=%USERNAME%", ex);
+
+                throw new InvalidOperationException($"无法在 {_prefix} 监听：{ex.Message}", ex);
             }
 
             _listener = listener;
@@ -232,6 +252,18 @@ namespace AcadMcp.Mcp
             {
                 res.Close();
             }
+        }
+    }
+
+    /// <summary>
+    /// 端口被本机其它进程占用（HttpListener 错误 183）。
+    /// 单独成一类是为了和权限问题区分开：这个换个端口就能解决，调用方应继续探测。
+    /// </summary>
+    internal sealed class PortInUseException : InvalidOperationException
+    {
+        public PortInUseException(string prefix, Exception inner)
+            : base($"{prefix} 已被本机其它进程占用。", inner)
+        {
         }
     }
 }

@@ -62,7 +62,7 @@ namespace AcadMcp.Acad
                 // DwgVersion.Current 在部分版本（如 2014）会报 eInvalidDwgVersion，按新→旧回退到一个能写的格式
                 DwgVersion[] candidates =
                 {
-                    DwgVersion.AC1032, DwgVersion.AC1027, DwgVersion.AC1024, DwgVersion.AC1021,
+                    DwgVersion.Current, DwgVersion.AC1027, DwgVersion.AC1024, DwgVersion.AC1021,
                 };
                 System.Exception? last = null;
                 foreach (var v in candidates)
