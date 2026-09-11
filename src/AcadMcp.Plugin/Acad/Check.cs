@@ -230,8 +230,7 @@ namespace AcadMcp.Acad
                 }
                 else if (!string.IsNullOrWhiteSpace(layer))
                 {
-                    var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
-                    var ms = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForRead);
+                    var ms = Space.Current(tr, db, OpenMode.ForRead);
                     foreach (ObjectId id in ms)
                     {
                         if (tr.GetObject(id, OpenMode.ForRead) is Entity e

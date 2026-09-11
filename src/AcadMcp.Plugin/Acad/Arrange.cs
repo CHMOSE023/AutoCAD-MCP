@@ -42,8 +42,7 @@ namespace AcadMcp.Acad
             using (doc.LockDocument())
             using (var tr = db.TransactionManager.StartTransaction())
             {
-                var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
-                var ms = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
+                var ms = Space.Current(tr, db, OpenMode.ForWrite);
 
                 foreach (var h in handles)
                 {
@@ -100,8 +99,7 @@ namespace AcadMcp.Acad
             using (doc.LockDocument())
             using (var tr = db.TransactionManager.StartTransaction())
             {
-                var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
-                var ms = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
+                var ms = Space.Current(tr, db, OpenMode.ForWrite);
 
                 foreach (var h in handles)
                 {

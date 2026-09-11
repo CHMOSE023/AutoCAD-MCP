@@ -48,7 +48,7 @@ namespace AcadMcp.Acad
                     foreach (ObjectId sid in srcIds)
                         if (tr.GetObject(sid, OpenMode.ForWrite) is Entity e) e.Erase();
 
-                    var ms = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
+                    var ms = Space.Current(tr, db, OpenMode.ForWrite);
                     var brf = new BlockReference(basePt, btrId);
                     ms.AppendEntity(brf);
                     tr.AddNewlyCreatedDBObject(brf, true);
@@ -148,7 +148,7 @@ namespace AcadMcp.Acad
                         $"图块 '{name}' 不存在。可用图块：{string.Join(", ", avail)}");
                 }
 
-                var ms = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
+                var ms = Space.Current(tr, db, OpenMode.ForWrite);
                 var br = new BlockReference(new Point3d(x, y, 0), bt[name])
                 {
                     ScaleFactors = new Scale3d(xscale, yscale, 1.0),
@@ -184,8 +184,9 @@ namespace AcadMcp.Acad
                 }
 
                 string handle = br.Handle.ToString();
+                string space = Space.CurrentName(db);
                 tr.Commit();
-                return $"已插入图块 '{name}'，handle={handle}";
+                return $"已插入图块 '{name}'，handle={handle}（{space}）";
             }
         }
     }

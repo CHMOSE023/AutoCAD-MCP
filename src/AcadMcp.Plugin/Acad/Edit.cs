@@ -29,8 +29,7 @@ namespace AcadMcp.Acad
             using (doc.LockDocument())
             using (var tr = db.TransactionManager.StartTransaction())
             {
-                var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
-                var ms = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
+                var ms = Space.Current(tr, db, OpenMode.ForWrite);
 
                 foreach (var h in handles)
                 {
@@ -76,8 +75,7 @@ namespace AcadMcp.Acad
                 if (!(tr.GetObject(id, OpenMode.ForWrite) is Curve curve))
                     throw new ArgumentException("break 只支持曲线实体（Line/Polyline/Arc/…）。");
 
-                var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
-                var ms = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
+                var ms = Space.Current(tr, db, OpenMode.ForWrite);
 
                 var p1 = curve.GetClosestPointTo(new Point3d(x1, y1, 0), false);
                 var p2 = curve.GetClosestPointTo(new Point3d(x2, y2, 0), false);

@@ -231,6 +231,14 @@ namespace AcadMcp.Acad
             return msg;
         }
 
+        /// <summary>
+        /// 把实体加进**当前空间**并返回 <c>handle=XXX（空间名）</c>。
+        ///
+        /// 空间名必须跟着 handle 一起报。只回一个 handle 的话，Agent 无从判断东西落在哪里——
+        /// 实测过一次：它在布局里画图框，图元其实进了模型空间，工具照样回 <c>handle=28A</c>，
+        /// 于是它以为成了，直到自己写 LISP 读 DXF 组码 67 才发现，之后九个回合都在绕这个坑。
+        /// 多这几个字，那九个回合就不会发生。
+        /// </summary>
         internal static string Append(Entity ent, string? layer, ConfigureEntity? configure = null)
         {
             var doc = AcadContext.ActiveDocument;
@@ -239,8 +247,7 @@ namespace AcadMcp.Acad
             using (doc.LockDocument())
             using (var tr = db.TransactionManager.StartTransaction())
             {
-                var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
-                var ms = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
+                var ms = Space.Current(tr, db, OpenMode.ForWrite);
 
                 if (!string.IsNullOrWhiteSpace(layer))
                 {
@@ -254,7 +261,7 @@ namespace AcadMcp.Acad
                 tr.AddNewlyCreatedDBObject(ent, true);
                 string handle = ent.Handle.ToString();
                 tr.Commit();
-                return handle;
+                return handle + Space.Suffix(db);
             }
         }
 

@@ -95,8 +95,7 @@ namespace AcadMcp.Acad
             using (doc.LockDocument())
             using (var tr = db.TransactionManager.StartTransaction())
             {
-                var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
-                var ms = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForRead);
+                var ms = Space.Current(tr, db, OpenMode.ForRead);
 
                 foreach (ObjectId id in ms)
                 {
@@ -138,6 +137,9 @@ namespace AcadMcp.Acad
 
             var result = new JObject
             {
+                // 扫的是**当前空间**，不是整张图。切到布局之后这里只看得见图纸空间的东西，
+                // 模型空间的实体一个都不会出现——不写明这一点，Agent 会以为图被清空了。
+                ["space"] = Space.CurrentName(db),
                 ["matched"] = matched,
                 ["returned"] = returned,
                 ["truncated"] = matched > returned,
@@ -169,8 +171,7 @@ namespace AcadMcp.Acad
             using (doc.LockDocument())
             using (var tr = db.TransactionManager.StartTransaction())
             {
-                var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
-                var ms = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForRead);
+                var ms = Space.Current(tr, db, OpenMode.ForRead);
 
                 foreach (ObjectId id in ms)
                 {
@@ -217,6 +218,9 @@ namespace AcadMcp.Acad
                 ["count"] = handles.Count,
                 ["handles"] = new JArray(handles),
                 ["sample"] = sample,
+                // 只在当前空间里选。切到布局之后选不到模型空间的实体，这不是 bug，
+                // 是与 AutoCAD 的 SELECT 一致的行为——但必须说出来，否则「怎么一个都选不中」会被当成故障。
+                ["space"] = Space.CurrentName(db),
                 ["note"] = handles.Count == 0
                     ? "没有匹配的实体，当前选择集已清空。"
                     : "已设为当前选择集，move/copy/rotate/scale/mirror/erase_entity/hatch 可传 useSelection:true 引用。",

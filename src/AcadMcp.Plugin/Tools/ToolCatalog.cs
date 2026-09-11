@@ -28,7 +28,7 @@ namespace AcadMcp.Tools
 
             tools.Add(new Tool(
                 "query_entities",
-                "遍历模型空间实体，可按类型（DXF 名如 LINE/CIRCLE/LWPOLYLINE 或 .NET 类名如 Line/Circle/Polyline）与图层过滤；返回 handle、类型、图层、包围盒。",
+                "遍历**当前空间**的实体（模型空间，或当前布局的图纸空间，随 TILEMODE/CTAB 变化），可按类型（DXF 名如 LINE/CIRCLE/LWPOLYLINE 或 .NET 类名如 Line/Circle/Polyline）与图层过滤；返回 handle、类型、图层、包围盒。结果里的 space 字段说明这次扫的是哪个空间——切到布局之后就看不见模型空间的实体了。",
                 Object(
                     P("type", "string", "实体类型过滤，可选"),
                     P("layer", "string", "图层名过滤，可选"),
@@ -71,7 +71,7 @@ namespace AcadMcp.Tools
             // ---------- 绘制 ----------
             tools.Add(new Tool(
                 "draw_line",
-                "在模型空间画一条直线，返回实体 handle。坐标为当前图形单位。",
+                "在**当前空间**画一条直线，返回实体 handle 与所在空间。坐标为当前图形单位。画在哪由当前布局决定：在 Model 上就是模型空间，用 set_layout 切到某个布局后就画进那张图纸的图纸空间（与命令行敲 LINE 的落点一致）。",
                 Object(
                     P("x1", "number", "起点 X", required: true),
                     P("y1", "number", "起点 Y", required: true),
@@ -85,7 +85,7 @@ namespace AcadMcp.Tools
 
             tools.Add(new Tool(
                 "draw_circle",
-                "在模型空间画圆，返回 handle。",
+                "在**当前空间**画圆，返回 handle 与所在空间。",
                 Object(
                     P("cx", "number", "圆心 X", required: true),
                     P("cy", "number", "圆心 Y", required: true),
@@ -97,7 +97,7 @@ namespace AcadMcp.Tools
 
             tools.Add(new Tool(
                 "draw_polyline",
-                "在模型空间画多段线（closed=true 可得矩形/闭合多边形），返回 handle。",
+                "在**当前空间**画多段线（closed=true 可得矩形/闭合多边形），返回 handle 与所在空间。要把图框画进布局，先用 set_layout 切过去再画。",
                 new JObject
                 {
                     ["type"] = "object",
@@ -141,7 +141,7 @@ namespace AcadMcp.Tools
 
             tools.Add(new Tool(
                 "draw_text",
-                "在模型空间放置单行文字（DBText），返回 handle。",
+                "在**当前空间**放置单行文字（DBText），返回 handle 与所在空间。",
                 Object(
                     P("x", "number", "插入点 X", required: true),
                     P("y", "number", "插入点 Y", required: true),
@@ -577,7 +577,7 @@ namespace AcadMcp.Tools
             // ================= P2：选择集 + 测量 + 块 =================
 
             tools.Add(new Tool("select",
-                "按条件选择模型空间实体并设为当前选择集（供 move/copy/rotate/scale/mirror/erase_entity/hatch 用 useSelection 引用）。" +
+                "按条件选择**当前空间**的实体并设为当前选择集（供 move/copy/rotate/scale/mirror/erase_entity/hatch 用 useSelection 引用）。与 AutoCAD 的 SELECT 一致：切到布局后选不到模型空间的实体。" +
                 "window：完全在框内；crossing=true：与框相交。",
                 new JObject
                 {
@@ -708,7 +708,7 @@ namespace AcadMcp.Tools
                 a => MainThread.Invoke(() => Layouts.List(Args.BoolOr(a, "includeViewports", false)))));
 
             tools.Add(new Tool("set_layout",
-                "切换当前布局。传 Model 回到模型空间（TILEMODE=1），传布局名进入图纸空间。",
+                "切换当前布局。传 Model 回到模型空间（TILEMODE=1），传布局名进入图纸空间。**这同时改变 draw_* 画在哪、query_entities 扫哪**——切到布局后画的实体进图纸空间，也查不到模型空间的实体。",
                 Object(P("name", "string", "布局名，或 Model 表示模型空间", true)),
                 a => MainThread.Invoke(() => Layouts.SetCurrent(Args.Str(a, "name")))));
 
@@ -813,7 +813,7 @@ namespace AcadMcp.Tools
                 _ => MainThread.Invoke(() => Xrefs.List())));
 
             tools.Add(new Tool("attach_xref",
-                "把一个 DWG 附着为外部参照并在模型空间插入。overlay=true 用覆盖方式（不随宿主再被参照时嵌套）。",
+                "把一个 DWG 附着为外部参照并在**当前空间**插入。overlay=true 用覆盖方式（不随宿主再被参照时嵌套）。",
                 Object(P("path", "string", "DWG 路径（绝对路径，或相对当前图形目录）", true),
                     P("x", "number", "插入点 X，默认 0"),
                     P("y", "number", "插入点 Y，默认 0"),

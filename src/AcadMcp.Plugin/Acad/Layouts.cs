@@ -109,7 +109,14 @@ namespace AcadMcp.Acad
 
                 string old = lm.CurrentLayout;
                 lm.CurrentLayout = target;
-                return $"当前布局：{old} -> {target}（TILEMODE={(target == ModelName ? 1 : 0)}）";
+                // 切布局同时改变了「画在哪」——绘图与查询工具都跟随当前空间。
+                // 不说这一句，Agent 切完布局继续画，会以为图元进了布局，其实要到下一次
+                // query_entities 看见 space 字段才发现（历史上这里坑过一次，见 Acad/Space.cs）。
+                string where = target == ModelName
+                    ? "模型空间"
+                    : $"布局「{target}」的图纸空间";
+                return $"当前布局：{old} -> {target}（TILEMODE={(target == ModelName ? 1 : 0)}）。"
+                     + $"此后 draw_* 画进{where}，query_entities / select 也只看{where}。";
             }
         }
 

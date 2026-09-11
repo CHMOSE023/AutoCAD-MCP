@@ -147,8 +147,7 @@ namespace AcadMcp.Acad
                     throw new ArgumentException($"未找到 handle {handle}");
 
                 var src = (Entity)tr.GetObject(id, OpenMode.ForRead);
-                var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
-                var ms = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
+                var ms = Space.Current(tr, db, OpenMode.ForWrite);
 
                 for (int i = 1; i <= count; i++)
                 {
@@ -178,8 +177,7 @@ namespace AcadMcp.Acad
                 if (!(tr.GetObject(id, OpenMode.ForRead) is Curve curve))
                     throw new ArgumentException("offset 只支持曲线类实体（Line / Polyline / Circle / Arc）。");
 
-                var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
-                var ms = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
+                var ms = Space.Current(tr, db, OpenMode.ForWrite);
 
                 double d = distance;
                 // 指定了参考侧点时，按点在曲线哪侧决定正负偏移
@@ -228,8 +226,7 @@ namespace AcadMcp.Acad
             using (doc.LockDocument())
             using (var tr = db.TransactionManager.StartTransaction())
             {
-                var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
-                var ms = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
+                var ms = Space.Current(tr, db, OpenMode.ForWrite);
                 foreach (var h in handles)
                 {
                     if (!Draw.TryGetObjectId(db, h, out var id)) { notFound.Add(h); continue; }
